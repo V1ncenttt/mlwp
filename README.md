@@ -34,7 +34,7 @@ This repository contains the codebase and experiments for my MSc thesis at Imper
 ---
 
 ## 🧱 Structure
-
+```bash
 .
 ├── models/              # Model definitions (CNN, ViT, Diffusion, etc.)
 ├── data/                # WeatherBench2 loading and preprocessing
@@ -42,6 +42,7 @@ This repository contains the codebase and experiments for my MSc thesis at Imper
 ├── configs/             # YAML config files
 ├── notebooks/           # Exploratory analysis and results
 └── results/             # Logs, metrics, figures
+```
 
 ---
 
