@@ -34,3 +34,54 @@ This repository contains the codebase and experiments for my MSc thesis at Imper
 ---
 
 ## 🧱 Structure
+
+.
+├── models/              # Model definitions (CNN, ViT, Diffusion, etc.)
+├── data/                # WeatherBench2 loading and preprocessing
+├── scripts/             # Training and evaluation scripts
+├── configs/             # YAML config files
+├── notebooks/           # Exploratory analysis and results
+└── results/             # Logs, metrics, figures
+
+---
+
+## 📊 Evaluation Metrics
+
+- RMSE, MAE, ACC, SSIM
+- Skill score vs climatology
+- Calibration plots for probabilistic outputs
+
+---
+
+## 📚 References
+
+- [WeatherBench2: Rasp et al. (2024)](https://doi.org/10.1029/2023MS004019)
+- [Generative Diffusion for Surrogate Modeling: Finn et al. (2024)](https://doi.org/10.1029/2024MS004395)
+
+---
+
+## 👤 Supervision
+
+- **Supervisor:** Dr. Sibo Cheng (Imperial College London)
+- **Collaboration:** Institut polytechnique de Paris (France)
+
+---
+
+## 📢 Publication & PhD Opportunity
+
+This thesis is part of a broader research direction aimed at high-impact publication (ICLR, NeurIPS, JAMES, GMD) and may evolve into a PhD depending on outcomes and funding.
+
+---
+
+## 🛠 Requirements
+
+- Python 3.10+
+- PyTorch, xarray, einops, WandB
+- See `requirements.txt` for full setup
+
+---
+
+## 📬 Contact
+
+For questions or collaboration inquiries, feel free to reach out:
+- [vincent.lefeuve@imperial.ac.uk](mailto:vincent.lefeuve@imperial.ac.uk)
