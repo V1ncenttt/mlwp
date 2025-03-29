@@ -1,0 +1,46 @@
+# config.yaml
+
+project: mlwp-thesis
+entity: your-wandb-username  # replace with your wandb user/org name
+name: experiment_01
+
+model:
+  type: transformer           # or cnn, diffusion, etc.
+  hidden_dim: 256
+  num_layers: 6
+  dropout: 0.1
+  input_channels: 3          # e.g., T2M, U10, V10
+  output_channels: 1         # e.g., T2M forecast
+
+data:
+  dataset: weatherbench2
+  root_dir: /path/to/data
+  resolution: 5.625deg
+  variables: [t2m, u10, v10]
+  lead_time: 24              # predict 24h ahead
+  context_length: 4          # use past 4 timesteps
+
+train:
+  epochs: 50
+  batch_size: 32
+  learning_rate: 0.0003
+  optimizer: adamw
+  scheduler: cosine
+  weight_decay: 1e-4
+
+loss:
+  type: mse
+  metrics: [rmse, mae]
+
+augmentation:
+  add_noise: true
+  noise_std: 0.05
+  spatial_masking: false
+
+logging:
+  log_every: 10
+  save_every: 1
+  use_wandb: true
+
+tags: [baseline, transformer, lowres]
+notes: Initial experiment using Transformer on WB2 5.625°
