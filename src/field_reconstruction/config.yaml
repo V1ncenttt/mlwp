@@ -1,0 +1,39 @@
+# config.yaml
+
+project: mlwp-thesis-fieldreco
+entity: your-wandb-username  # replace with your wandb user/org name
+
+
+model:
+  type: transformer           # or cnn, diffusion, etc.
+  hidden_dim: 256
+  num_layers: 6
+  dropout: 0.1
+  input_channels: 3          # e.g., T2M, U10, V10
+  output_channels: 1         # e.g., T2M forecast
+
+data:
+  dataset: weatherbench2
+  root_dir: /path/to/data
+  resolution: 5.625deg
+  variables: [t2m, u10, v10]
+
+train:
+  epochs: 50
+  batch_size: 32
+  learning_rate: 0.0003
+  optimizer: adamw
+  scheduler: cosine
+  weight_decay: 1e-4
+
+loss:
+  type: mse
+  metrics: [rmse, mae]
+
+logging:
+  log_every: 10
+  save_every: 1
+  use_wandb: true
+
+tags: [baseline, transformer, lowres]
+notes: Initial experiment using Transformer on WB2 5.625°

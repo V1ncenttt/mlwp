@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+#Other:
+src/*/cluster_job.sh
+src/*/slurm*
+data/*
 # C extensions
 *.so
 
