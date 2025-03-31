@@ -63,7 +63,7 @@ This repository contains the codebase and experiments for my MSc thesis at Imper
 
 ## 👤 Supervision
 
-- **Supervisor:** Dr. Sibo Cheng (Imperial College London)
+- **Supervisor:** Dr. Sibo Cheng (Imperial College London/ Institut Polytechnique de Paris)
 - **Collaboration:** Institut polytechnique de Paris (France)
 
 ---
