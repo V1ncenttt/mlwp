@@ -6,7 +6,7 @@ __pycache__/
 #Other:
 src/*/cluster_job.sh
 src/*/slurm*
-data/*
+data/weatherbench2*
 # C extensions
 *.so
 
