@@ -9,11 +9,13 @@ from scipy.interpolate import griddata
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
 import torch
-from utils import sample_sensor_locations, voronoi_mask
+from utils import sample_sensor_locations, voronoi_tesselate
 from models import FukamiNet
-from train import train_model
+from train import train
+from prepare_data import create_and_save_field_reco_dataset, load_field_reco_dataloaders
+from tqdm import tqdm
 
-
+"""
 # --- Load dataset ---
 data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/weatherbench2_5vars_flat.nc"))
 print("🔍 Loading dataset...")
@@ -93,7 +95,7 @@ filename = os.path.join(output_dir, f"interp_comparison_{var_name}.png")
 plt.savefig(filename, dpi=200)
 print(f"📸 Plot saved to {filename}")
 plt.show()
-
+"""
 def get_train_objects(args):
     
     if args.model == "fukami":
@@ -108,6 +110,7 @@ def get_config_params():
         config = yaml.safe_load(file)
     #Print the dataset name
     print(f"Dataset: {config['data']['dataset']}")
+    return config
     
 if __name__ == "__main__":
     # This block is executed when the script is run directly
@@ -120,13 +123,42 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     config = get_config_params()
-    data = None
-    print(f"Config: {config}")
     
+   
+    variable = config["variable"]
+    percent = config["percent"]
+    output_dir = config["output_dir"]
+    batch_size = config["batch_size"]
+    split_ratio = config["split_ratio"]
+    
+    #If the dataset is not already created, create it
+    if not os.path.exists(os.path.join(output_dir, f"{variable}_{percent}p_train.pt")):
+        print("Dataset not found. Creating dataset...")
+        # Create the dataset
+        create_and_save_field_reco_dataset(
+        path_to_nc="../../data/weatherbench2_5vars_flat.nc",
+        variable=variable,
+        percent=10,
+        output_dir="../../data/weatherbench2_fieldreco/"
+        )
+    else:
+        print("Dataset already exists. Skipping dataset creation.")
+        
     if args.train:
         # Call the training function
-        print("Training the model...")
-        train_model(args.model, data, args.model_path, config)
+        print(f"Training model {args.model}...")
+        
+        train_dataloader, val_dataloader = load_field_reco_dataset(
+            batch_size=batch_size,
+            mode="train",
+            variable=variable,
+            percent=percent,
+            split_ratio=split_ratio,
+        )
+        
+        data = {"train_loader": train_dataloader, "val_loader": val_dataloader}
+        train(args.model, data, "models/saves/", config)
+        
     elif args.test:
         # Call the testing function
         print("Testing the model...")

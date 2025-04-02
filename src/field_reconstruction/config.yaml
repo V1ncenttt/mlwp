@@ -35,5 +35,13 @@ logging:
   save_every: 1
   use_wandb: true
 
+split_ratio: 0.8
+model: fukami
+percent: 10
+batch_size: 32
+variable: 2m_temperature
+output_dir: ../../data/weatherbench2_fieldreco/
+optimizer: adam
+weight_decay: 0.01
 tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°

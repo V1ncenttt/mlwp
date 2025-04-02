@@ -24,14 +24,18 @@ def get_optimizer(model, config):
     Returns:
         optimizer: Optimizer instance.
     """
-    if config.optimizer == "adam":
-        return optim.Adam(model.parameters(), lr=config.learning_rate)
-    if config.optimizer == "adamw":
-        return optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-    elif config.optimizer == "sgd":
-        return optim.SGD(model.parameters(), lr=config.learning_rate, momentum=0.9)
+    optimizer = config["optimizer"]
+    lr = config["learning_rate"]
+    weight_decay = config["weight_decay"]
+    
+    if optimizer == "adam":
+        return optim.Adam(model.parameters(), lr=lr)
+    if optimizer == "adamw":
+        return optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    elif optimizer == "sgd":
+        return optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     else:
-        raise ValueError(f"Unknown optimizer type: {config.optimizer}")   
+        raise ValueError(f"Unknown optimizer type: {optimizer}")   
 
 def get_loss_function(config):
     """
@@ -43,14 +47,15 @@ def get_loss_function(config):
     Returns:
         criterion: Loss function instance.
     """
-    if config.loss == "mse":
+    loss = config["loss"]
+    if loss == "mse":
         return nn.MSELoss()
-    elif config.loss == "mae":
+    elif loss == "mae":
         return nn.L1Loss()
-    elif config.loss == "smoothl1":
+    elif loss == "smoothl1":
         return nn.SmoothL1Loss()
     else:
-        raise ValueError(f"Unknown loss function type: {config.loss}")
+        raise ValueError(f"Unknown loss function type: {loss}")
     
 def train(model, data, model_save_path, config):
     """
@@ -66,11 +71,11 @@ def train(model, data, model_save_path, config):
     model = create_model(model).to(device)
     criterion = get_loss_function(config)
     optimizer = get_optimizer(model, config)
-    folds = config.folds
+    
     train_loader = data.train_loader
     val_loader = data.val_loader
-    
-    
+    print("Everything is set up, starting training...")
+    exit(0)
     model.train()
     running_loss = 0.0
     for data in train_loader:
