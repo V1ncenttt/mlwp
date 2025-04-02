@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
+import torch
 
 def voronoi_mask(sensor_coords, grid_shape):
     """
@@ -39,3 +40,12 @@ def sample_sensor_locations(grid_shape, num_sensors):
     indices = np.stack(np.meshgrid(np.arange(H), np.arange(W)), axis=-1).reshape(-1, 2)
     sampled = indices[np.random.choice(indices.shape[0], num_sensors, replace=False)]
     return [tuple(coord) for coord in sampled]
+
+def get_device():
+    """
+    Get the device to use for PyTorch.
+    
+    Returns:
+        device: 'cuda' if available, otherwise 'cpu'.
+    """
+    return 'cuda' if torch.cuda.is_available() else 'cpu'

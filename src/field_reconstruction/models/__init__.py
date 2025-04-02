@@ -1,0 +1,1 @@
+from models.fukami import FukamiNet

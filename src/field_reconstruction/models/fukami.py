@@ -3,29 +3,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class FukamiNet(nn.Module):
-    def __init__(self, in_channels=1, out_channels=1, features=[32, 64, 128]):
+    def __init__(self, in_channels=2, out_channels=1):
         super(FukamiNet, self).__init__()
 
-        layers = []
-        current_channels = in_channels
-
-        # Encoder
-        for f in features:
-            layers.append(nn.Conv2d(current_channels, f, kernel_size=3, padding=1))
-            layers.append(nn.ReLU(inplace=True))
-            layers.append(nn.MaxPool2d(2))
-            current_channels = f
-
-        # Decoder
-        for f in reversed(features):
-            layers.append(nn.ConvTranspose2d(current_channels, f, kernel_size=2, stride=2))
-            layers.append(nn.ReLU(inplace=True))
-            current_channels = f
-
-        # Final output layer
-        layers.append(nn.Conv2d(current_channels, out_channels, kernel_size=3, padding=1))
-
-        self.model = nn.Sequential(*layers)
+        self.layers = nn.Sequential(
+            nn.Conv2d(in_channels, 48, kernel_size=7, padding=3),  # same padding
+            nn.ReLU(inplace=True),
+            nn.Conv2d(48, 48, kernel_size=7, padding=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(48, 48, kernel_size=7, padding=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(48, 48, kernel_size=7, padding=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(48, 48, kernel_size=7, padding=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(48, 48, kernel_size=7, padding=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(48, 48, kernel_size=7, padding=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(48, out_channels, kernel_size=7, padding=3)
+        )
 
     def forward(self, x):
-        return self.model(x)
+        return self.layers(x)

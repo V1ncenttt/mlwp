@@ -1,38 +1,135 @@
-import xarray as xr
-import wandb
-import yaml
 import os
 import argparse
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
+import yaml
+import wandb
+from scipy.interpolate import griddata
+from scipy.spatial import Voronoi
+from skimage.draw import polygon
+import torch
+from utils import sample_sensor_locations, voronoi_mask
+from models import FukamiNet
+from train import train_model
 
-# Relative path to save location (your data/ folder)
-save_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/weatherbench2_5vars_3d.nc"))
 
-# Select 5 key surface variables
-selected_vars = [
-    "2m_temperature",
-    "10m_u_component_of_wind",
-    "10m_v_component_of_wind",
-    "mean_sea_level_pressure",
-    "total_column_water_vapour"
-]
+# --- Load dataset ---
+data_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/weatherbench2_5vars_flat.nc"))
+print("🔍 Loading dataset...")
+ds = xr.open_dataset(data_path)
 
-selected_vars_3D = ["u_component_of_wind", "v_component_of_wind", "temperature", "specific_humidity", "geopotential"]
+# Pick a 2D variable and first timestep
+var_name = "2m_temperature"
+assert var_name in ds, f"{var_name} not found in dataset"
+field = ds[var_name].isel(time=0).values  # shape: (lat, lon)
 
+# Normalize field
+field = (field - np.nanmean(field)) / np.nanstd(field)
+H, W = field.shape
+num_sensors = int(0.10 * H * W)
+
+# --- Sample sensors ---
+sensor_coords = sample_sensor_locations((H, W), num_sensors)
+sensor_values = np.array([field[y, x] for (y, x) in sensor_coords])
+points = np.array([(x, y) for (y, x) in sensor_coords])
+grid_x, grid_y = np.meshgrid(np.arange(W), np.arange(H))
+
+# --- Interpolation (linear and cubic) ---
+print("📈 Performing interpolation...")
+interp_linear = griddata(points, sensor_values, (grid_x, grid_y), method='linear', fill_value=np.nan)
+interp_cubic = griddata(points, sensor_values, (grid_x, grid_y), method='cubic', fill_value=np.nan)
+
+# --- Compute MSEs ---
+true_tensor = torch.tensor(field, dtype=torch.float32)
+linear_tensor = torch.tensor(interp_linear, dtype=torch.float32)
+cubic_tensor = torch.tensor(interp_cubic, dtype=torch.float32)
+
+mask_linear = ~torch.isnan(linear_tensor)
+mask_cubic = ~torch.isnan(cubic_tensor)
+
+mse_linear = torch.mean((true_tensor[mask_linear] - linear_tensor[mask_linear]) ** 2)
+mse_cubic = torch.mean((true_tensor[mask_cubic] - cubic_tensor[mask_cubic]) ** 2)
+
+print(f"✅ Linear MSE: {mse_linear.item():.5f}")
+print(f"✅ Cubic  MSE: {mse_cubic.item():.5f}")
+
+# --- Plotting ---
+output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../plots"))
+os.makedirs(output_dir, exist_ok=True)
+
+# Sparse sensor map
+sparse_field = np.full_like(field, np.nan)
+for (y, x), val in zip(sensor_coords, sensor_values):
+    sparse_field[y, x] = val
+
+# Voronoi tessellation
+vor_mask = voronoi_mask(sensor_coords, (H, W))
+
+fig, axs = plt.subplots(1, 5, figsize=(20, 4))
+
+axs[0].imshow(field, cmap="coolwarm")
+axs[0].set_title("Ground Truth")
+axs[0].axis('off')
+
+axs[1].imshow(sparse_field, cmap="coolwarm")
+axs[1].set_title("Sparse Sensors (10%)")
+axs[1].axis('off')
+
+axs[2].imshow(interp_linear, cmap="coolwarm")
+axs[2].set_title(f"Linear (MSE={mse_linear.item():.4f})")
+axs[2].axis('off')
+
+axs[3].imshow(interp_cubic, cmap="coolwarm")
+axs[3].set_title(f"Cubic (MSE={mse_cubic.item():.4f})")
+axs[3].axis('off')
+
+axs[4].imshow(vor_mask, cmap="tab20")
+axs[4].set_title("Voronoi Tessellation")
+axs[4].axis('off')
+
+plt.tight_layout()
+filename = os.path.join(output_dir, f"interp_comparison_{var_name}.png")
+plt.savefig(filename, dpi=200)
+print(f"📸 Plot saved to {filename}")
+plt.show()
+
+def get_train_objects(args):
+    
+    if args.model == "fukami":
+        model = FukamiNet()
+    elif args.model == "VAE":
+        model = None
+    
+def get_config_params():
+    # Load the configuration parameters from a YAML file
+    config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+    #Print the dataset name
+    print(f"Dataset: {config['data']['dataset']}")
+    
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-                    prog='ProgramName',
-                    description='What the program does',
-                    epilog='Text at the bottom of help')
+    # This block is executed when the script is run directly
+    parser = argparse.ArgumentParser(description="Field Reconstruction with Interpolation")
+    parser.add_argument("--train", action="store_true", help="Train the model")
+    parser.add_argument("--test", action="store_true", help="Test the model")
+    parser.add_argument("--num_sensors", type=int, default=100, help="Number of sensors to sample")
+    parser.add_argument("--model", type=str, default="fukami", help="Model to use (fukami or VAE)")
+    parser.add_argument("--model_path", type=str, default=None, help="Path to the trained model/save path")
     
-    path = 'gs://weatherbench2/datasets/era5/1959-2023_01_10-6h-64x32_equiangular_conservative.zarr'
+    args = parser.parse_args()
+    config = get_config_params()
+    data = None
+    print(f"Config: {config}")
     
-    ds = xr.open_zarr(path, consolidated=True)
-    
-    print(ds)
-
-    ds_subset = ds[selected_vars_3D]
-
-    print(f"Saving subset to: {save_path}")
-    ds_subset.to_netcdf(save_path)
-
-    print("Done!")
+    if args.train:
+        # Call the training function
+        print("Training the model...")
+        train_model(args.model, data, args.model_path, config)
+    elif args.test:
+        # Call the testing function
+        print("Testing the model...")
+        # test_model(args.model, args.model_path)
+    else:
+        print("No action specified. Use --train or --test.")
