@@ -1,4 +1,4 @@
-# 🌦️ Deterministic vs Probabilistic Machine Learning for Weather Prediction
+# 🌦️ Comparative Study of Deterministic and Generative Surrogate Models for Numerical Weather Prediction
 
 This repository contains the codebase and experiments for my MSc thesis at Imperial College London. The goal is to compare **deterministic** machine learning models (e.g., CNNs, Transformers) with **probabilistic** generative models (e.g., diffusion models) for weather forecasting, using the [WeatherBench2](https://github.com/weatherbench2) dataset.
 
