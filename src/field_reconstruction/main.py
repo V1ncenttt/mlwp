@@ -113,6 +113,7 @@ def get_config_params():
     return config
     
 if __name__ == "__main__":
+    print("🚀 Starting Field Reconstruction with Interpolation...")
     # This block is executed when the script is run directly
     parser = argparse.ArgumentParser(description="Field Reconstruction with Interpolation")
     parser.add_argument("--train", action="store_true", help="Train the model")
@@ -148,7 +149,7 @@ if __name__ == "__main__":
         # Call the training function
         print(f"Training model {args.model}...")
         
-        train_dataloader, val_dataloader = load_field_reco_dataset(
+        train_dataloader, val_dataloader = load_field_reco_dataloaders(
             batch_size=batch_size,
             mode="train",
             variable=variable,

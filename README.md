@@ -54,6 +54,37 @@ This repository contains the codebase and experiments for my MSc thesis at Imper
 
 ---
 
+## 🗺️ Field Reconstruction
+
+Field reconstruction is a core task in data-driven weather modeling. It consists in recovering full spatial fields (e.g. temperature, wind) from sparse and irregular observations — as often encountered in real-world meteorological sensor networks.
+
+In this project, we simulate sparse sensor measurements from the WeatherBench2 dataset and compare several methods for reconstructing the full field:
+
+### 🔬 Methods Compared
+
+| Method | Description |
+|--------|-------------|
+| **Fukami-style CNN** | A convolutional neural network trained on **Voronoi-tessellated inputs**, where each sensor region is filled using a Voronoi mask. This architecture is adapted from [Fukami et al.](https://www.nature.com/articles/s42256-021-00402-2). |
+| **Variational Autoencoder (VAE)** | A generative model that learns a low-dimensional latent representation of fields, then performs reconstruction by optimizing in latent space given sparse observations. |
+| **Linear & Cubic Interpolation** | Classical interpolation techniques using `scipy.griddata`, serving as baselines. These are purely geometric and don’t learn from data. |
+
+Each method takes as input:
+- A 2-channel tensor:
+  - Channel 1: sparse input field (e.g. Voronoi-tessellated or interpolated)
+  - Channel 2: binary sensor mask
+- The goal is to reconstruct the full target field and minimize reconstruction error (e.g. MSE).
+
+### 🧪 Evaluation
+
+We evaluate the methods on random held-out samples using:
+- Mean squared error (MSE)
+- Visual comparisons (ground truth vs. reconstruction)
+- Robustness under varying sparsity levels
+
+You can find visualizations and plots in the `plots/` folder after training.
+
+---
+
 ## 📚 References
 
 - [WeatherBench2: Rasp et al. (2024)](https://doi.org/10.1029/2023MS004019)

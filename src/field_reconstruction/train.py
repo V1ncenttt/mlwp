@@ -3,7 +3,7 @@ import torch.optim as optim
 import torch.nn as nn
 from models import FukamiNet
 from utils import get_device
-
+from plots_creator import plot_voronoi_reconstruction_comparison
 def create_model(model):
     if model == "fukami":
         return FukamiNet()
@@ -56,38 +56,92 @@ def get_loss_function(config):
         return nn.SmoothL1Loss()
     else:
         raise ValueError(f"Unknown loss function type: {loss}")
-    
-def train(model, data, model_save_path, config):
+
+def plot_random_reconstruction(model, val_loader, device, model_name, save_dir):
+    """
+    Run the trained model on a random validation sample and plot the output.
+    """
+    model.eval()
+    with torch.no_grad():
+        sample_idx = random.randint(0, len(val_loader.dataset) - 1)
+        x, y = val_loader.dataset[sample_idx]  # single sample
+        x = x.unsqueeze(0).to(device)          # add batch dim
+        y = y.squeeze().cpu().numpy()          # (1, H, W) → (H, W)
+
+        pred = model(x).squeeze().cpu().numpy()   # (1, H, W) → (H, W)
+
+        x_np = x.squeeze().cpu().numpy()          # (2, H, W)
+        tess = x_np[0]  # Voronoi tessellated field
+        mask = x_np[1]  # sensor mask (0/1)
+
+        plot_path = os.path.join(save_dir, f"{model_name}_reco_sample.png")
+        plot_voronoi_reconstruction_comparison(
+            voronoi_mask=mask,
+            ground_truth=y,
+            cnn_output=pred,
+            mask=mask,
+            save_path=plot_path
+        )
+           
+def train(model_name, data, model_save_path, config):
     """
     Train the model on the given data.
-    
+
     Args:
-        model: Model to train.
-        data: Training data.
+        model_name: Name of the model (str).
+        data: Dict with 'train_loader' and 'val_loader'.
         model_save_path: Path to save the trained model.
-        config: Configuration parameters.
+        config: Configuration parameters (dict).
     """
     device = get_device()
-    model = create_model(model).to(device)
+    model = create_model(model_name).to(device)
     criterion = get_loss_function(config)
     optimizer = get_optimizer(model, config)
+    epochs = config["epochs"]
+
+    train_loader = data["train_loader"]
+    val_loader = data["val_loader"]
+
+    print("📦 Training started...")
+    for epoch in range(1, epochs + 1):
+        model.train()
+        train_loss = 0.0
+
+        for inputs, targets in train_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+
+        train_loss /= len(train_loader)
+
+        # Validation
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for inputs, targets in val_loader:
+                inputs, targets = inputs.to(device), targets.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+                val_loss += loss.item()
+
+        val_loss /= len(val_loader)
+
+        print(f"📉 Epoch {epoch}/{epochs} — Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
+
+    if model_save_path:
+        complete_path= os.join(model_save_path, f"{model_name}_model_{epochs}_{val_loss}.pth")
+        torch.save(model.state_dict(), model_save_path)
+        print(f"💾 Model saved to {model_save_path}")
+    #Save last loss to file
+    with open(os.path.join(model_save_path, f"last_loss_{epochs}.txt"), "w") as f:
+        f.write(f"Last validation loss: {val_loss:.6f}")
     
-    train_loader = data.train_loader
-    val_loader = data.val_loader
-    print("Everything is set up, starting training...")
-    exit(0)
-    model.train()
-    running_loss = 0.0
-    for data in train_loader:
-        inputs, targets = data
-        inputs, targets = inputs.to(device), targets.to(device)
+    plot_random_reconstruction(model, val_loader, device, model_name, model_save_path)
 
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
-        loss.backward()
-        optimizer.step()
-
-        running_loss += loss.item()
-
-    return running_loss / len(train_loader)
+    return model

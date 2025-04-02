@@ -67,3 +67,53 @@ def plot_reconstruction_comparison(ground_truth, reconstruction, mask=None, titl
         plt.show()
 
     plt.close()
+    
+def plot_voronoi_reconstruction_comparison(voronoi_mask, ground_truth, cnn_output, mask=None,
+                                            titles=("Voronoi Regions", "Ground Truth", "CNN Reconstruction"),
+                                            save_path=None):
+    """
+    Plots Voronoi regions, ground truth, and CNN reconstruction side by side.
+
+    Args:
+        voronoi_mask: 2D array with integers representing Voronoi regions.
+        ground_truth: 2D array of the real field values.
+        cnn_output: 2D array of reconstructed field from CNN.
+        mask: Optional 2D array to overlay sensor locations (1s).
+        titles: Tuple of titles for each subplot.
+        save_path: Optional path to save the figure.
+    """
+    fig, axs = plt.subplots(1, 3, figsize=(15, 4))
+
+    # Plot Voronoi mask
+    axs[0].imshow(voronoi_mask, cmap="tab20", interpolation="none")
+    axs[0].set_title(titles[0])
+    axs[0].axis("off")
+
+    # Plot ground truth
+    im1 = axs[1].imshow(ground_truth, cmap="coolwarm", interpolation="none")
+    axs[1].set_title(titles[1])
+    axs[1].axis("off")
+    fig.colorbar(im1, ax=axs[1], shrink=0.75)
+
+    # Plot CNN reconstruction
+    im2 = axs[2].imshow(cnn_output, cmap="coolwarm", interpolation="none")
+    axs[2].set_title(titles[2])
+    axs[2].axis("off")
+    fig.colorbar(im2, ax=axs[2], shrink=0.75)
+
+    # Overlay sensors if provided
+    if mask is not None:
+        y, x = np.where(mask > 0)
+        axs[1].scatter(x, y, s=8, c='black', marker='x', label='Sensors')
+        axs[2].scatter(x, y, s=8, c='black', marker='x')
+
+    plt.tight_layout()
+
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=200)
+        print(f"📸 Saved Voronoi + reconstruction plot to {save_path}")
+    else:
+        plt.show()
+
+    plt.close()

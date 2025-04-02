@@ -26,9 +26,7 @@ train:
   scheduler: cosine
   weight_decay: 1e-4
 
-loss:
-  type: mse
-  metrics: [rmse, mae]
+loss: mse
 
 logging:
   log_every: 10
@@ -42,6 +40,8 @@ batch_size: 32
 variable: 2m_temperature
 output_dir: ../../data/weatherbench2_fieldreco/
 optimizer: adam
+learning_rate: 0.001
 weight_decay: 0.01
+epochs: 10
 tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
