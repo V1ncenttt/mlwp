@@ -1,9 +1,14 @@
 import torch
 import torch.optim as optim
 import torch.nn as nn
+from tqdm import tqdm
+import os
+import random
+import numpy as np
 from models import FukamiNet
 from utils import get_device
 from plots_creator import plot_voronoi_reconstruction_comparison
+
 def create_model(model):
     if model == "fukami":
         return FukamiNet()
@@ -102,12 +107,21 @@ def train(model_name, data, model_save_path, config):
     train_loader = data["train_loader"]
     val_loader = data["val_loader"]
 
+    print(f"📊 Number of training samples: {len(train_loader.dataset)}")
+    print(f"📊 Number of validation samples: {len(val_loader.dataset)}")
+    
+    print(model_save_path)
+    if not os.path.exists(model_save_path):
+        os.makedirs(model_save_path)
+        print(f"📁 Created directory: {model_save_path}")
+        
     print("📦 Training started...")
     for epoch in range(1, epochs + 1):
         model.train()
         train_loss = 0.0
 
-        for inputs, targets in train_loader:
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs} [Training]", leave=False)
+        for inputs, targets in pbar:
             inputs, targets = inputs.to(device), targets.to(device)
 
             optimizer.zero_grad()
@@ -123,8 +137,9 @@ def train(model_name, data, model_save_path, config):
         # Validation
         model.eval()
         val_loss = 0.0
+        val_pbar = tqdm(val_loader, desc=f"Epoch {epoch}/{epochs} [Validation]", leave=False)
         with torch.no_grad():
-            for inputs, targets in val_loader:
+            for inputs, targets in val_pbar:
                 inputs, targets = inputs.to(device), targets.to(device)
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
@@ -135,8 +150,8 @@ def train(model_name, data, model_save_path, config):
         print(f"📉 Epoch {epoch}/{epochs} — Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
 
     if model_save_path:
-        complete_path= os.join(model_save_path, f"{model_name}_model_{epochs}_{val_loss}.pth")
-        torch.save(model.state_dict(), model_save_path)
+        complete_path= os.path.join(model_save_path, f"{model_name}_model_{epochs}_{val_loss}.pth")
+        torch.save(model.state_dict(), complete_path)
         print(f"💾 Model saved to {model_save_path}")
     #Save last loss to file
     with open(os.path.join(model_save_path, f"last_loss_{epochs}.txt"), "w") as f:
