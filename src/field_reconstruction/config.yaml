@@ -26,7 +26,7 @@ train:
   scheduler: cosine
   weight_decay: 1e-4
 
-loss: mse
+loss: vae_elbo
 
 logging:
   log_every: 10
@@ -34,7 +34,7 @@ logging:
   use_wandb: true
 
 split_ratio: 0.8
-model: fukami
+model: vae
 percent: 10
 batch_size: 32
 variable: 2m_temperature

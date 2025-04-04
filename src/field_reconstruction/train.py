@@ -5,16 +5,16 @@ from tqdm import tqdm
 import os
 import random
 import numpy as np
-from models import FukamiNet
+from models import FukamiNet, ReconstructionVAE
 from utils import get_device
 from plots_creator import plot_voronoi_reconstruction_comparison
 
 def create_model(model):
     if model == "fukami":
         return FukamiNet()
-    elif model == "VAE":
+    elif model == "vae":
         # Assuming VAE is defined elsewhere
-        return None
+        return ReconstructionVAE(channels=2, latent_dim=128)
     else:
         raise ValueError(f"Unknown model type: {model}")
 
@@ -42,6 +42,24 @@ def get_optimizer(model, config):
     else:
         raise ValueError(f"Unknown optimizer type: {optimizer}")   
 
+def beta_vae_loss_function(recon_x, x, mu, logvar, beta=1.0):
+    """
+    Compute the beta-VAE loss.
+    
+    Args:
+        recon_x: Reconstructed input.
+        x: Original input.
+        mu: Mean from the encoder.
+        logvar: Log variance from the encoder.
+        beta: Weight for KL divergence term.
+    
+    Returns:
+        loss: Computed loss value.
+    """
+    recon_loss = nn.functional.mse_loss(recon_x, x, reduction='mean')
+    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    return recon_loss + beta * KLD
+
 def get_loss_function(config):
     """
     Get the loss function based on the configuration.
@@ -59,6 +77,8 @@ def get_loss_function(config):
         return nn.L1Loss()
     elif loss == "smoothl1":
         return nn.SmoothL1Loss()
+    elif loss == "vae_elbo":
+        return beta_vae_loss_function
     else:
         raise ValueError(f"Unknown loss function type: {loss}")
 
@@ -73,7 +93,11 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir):
         x = x.unsqueeze(0).to(device)          # add batch dim
         y = y.squeeze().cpu().numpy()          # (1, H, W) → (H, W)
 
-        pred = model(x).squeeze().cpu().numpy()   # (1, H, W) → (H, W)
+        if model_name == "vae":
+            recon_x, mu, logvar = model(x)
+            pred = recon_x.squeeze().cpu().numpy()
+        else:
+            pred = model(x).squeeze().cpu().numpy()   # (1, H, W) → (H, W)
 
         x_np = x.squeeze().cpu().numpy()          # (2, H, W)
         tess = x_np[0]  # Voronoi tessellated field
@@ -103,14 +127,13 @@ def train(model_name, data, model_save_path, config):
     criterion = get_loss_function(config)
     optimizer = get_optimizer(model, config)
     epochs = config["epochs"]
-
+    
     train_loader = data["train_loader"]
     val_loader = data["val_loader"]
 
     print(f"📊 Number of training samples: {len(train_loader.dataset)}")
     print(f"📊 Number of validation samples: {len(val_loader.dataset)}")
     
-    print(model_save_path)
     if not os.path.exists(model_save_path):
         os.makedirs(model_save_path)
         print(f"📁 Created directory: {model_save_path}")
@@ -125,11 +148,16 @@ def train(model_name, data, model_save_path, config):
             inputs, targets = inputs.to(device), targets.to(device)
 
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
+
+            if model_name == "vae" and config["loss"] == "vae_elbo":
+                recon_x, mu, logvar = model(inputs)
+                loss = criterion(recon_x, inputs, mu, logvar)
+            else:
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+
             loss.backward()
             optimizer.step()
-
             train_loss += loss.item()
 
         train_loss /= len(train_loader)
@@ -141,19 +169,26 @@ def train(model_name, data, model_save_path, config):
         with torch.no_grad():
             for inputs, targets in val_pbar:
                 inputs, targets = inputs.to(device), targets.to(device)
-                outputs = model(inputs)
-                loss = criterion(outputs, targets)
+
+                if model_name == "vae" and config["loss"] == "vae_elbo":
+                    recon_x, mu, logvar = model(inputs)
+                    loss = criterion(recon_x, inputs, mu, logvar)
+                else:
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets)
+
                 val_loss += loss.item()
 
         val_loss /= len(val_loader)
-
         print(f"📉 Epoch {epoch}/{epochs} — Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
 
+    # Save model
     if model_save_path:
-        complete_path= os.path.join(model_save_path, f"{model_name}_model_{epochs}_{val_loss}.pth")
+        complete_path = os.path.join(model_save_path, f"{model_name}_model_{epochs}_{val_loss:.6f}.pth")
         torch.save(model.state_dict(), complete_path)
-        print(f"💾 Model saved to {model_save_path}")
-    #Save last loss to file
+        print(f"💾 Model saved to {complete_path}")
+    
+    # Save last validation loss to file
     with open(os.path.join(model_save_path, f"last_loss_{epochs}.txt"), "w") as f:
         f.write(f"Last validation loss: {val_loss:.6f}")
     

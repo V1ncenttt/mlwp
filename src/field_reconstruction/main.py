@@ -10,7 +10,7 @@ from scipy.spatial import Voronoi
 from skimage.draw import polygon
 import torch
 from utils import sample_sensor_locations, voronoi_tesselate
-from models import FukamiNet
+from models import FukamiNet, ReconstructionVAE
 from train import train
 from prepare_data import create_and_save_field_reco_dataset, load_field_reco_dataloaders
 from tqdm import tqdm
@@ -101,7 +101,7 @@ def get_train_objects(args):
     if args.model == "fukami":
         model = FukamiNet()
     elif args.model == "VAE":
-        model = None
+        model = ReconstructionVAE(channels=2, latent_dim=128)
     
 def get_config_params():
     # Load the configuration parameters from a YAML file
@@ -119,7 +119,6 @@ if __name__ == "__main__":
     parser.add_argument("--train", action="store_true", help="Train the model")
     parser.add_argument("--test", action="store_true", help="Test the model")
     parser.add_argument("--num_sensors", type=int, default=100, help="Number of sensors to sample")
-    parser.add_argument("--model", type=str, default="fukami", help="Model to use (fukami or VAE)")
     parser.add_argument("--model_path", type=str, default=None, help="Path to the trained model/save path")
     
     args = parser.parse_args()
@@ -131,6 +130,7 @@ if __name__ == "__main__":
     output_dir = config["output_dir"]
     batch_size = config["batch_size"]
     split_ratio = config["split_ratio"]
+    model = config["model"]
     
     #If the dataset is not already created, create it
     if not os.path.exists(os.path.join(output_dir, f"{variable}_{percent}p_train.pt")):
@@ -147,7 +147,7 @@ if __name__ == "__main__":
         
     if args.train:
         # Call the training function
-        print(f"Training model {args.model}...")
+        print(f"Training model {model}...")
         
         train_dataloader, val_dataloader = load_field_reco_dataloaders(
             batch_size=batch_size,
@@ -158,7 +158,7 @@ if __name__ == "__main__":
         )
         
         data = {"train_loader": train_dataloader, "val_loader": val_dataloader}
-        train(args.model, data, "models/saves/", config)
+        train(model, data, "models/saves/", config)
         
     elif args.test:
         # Call the testing function
