@@ -12,6 +12,7 @@ import torch
 from utils import sample_sensor_locations, voronoi_tesselate
 from models import FukamiNet, ReconstructionVAE
 from train import train
+from test import evaluate
 from prepare_data import create_and_save_field_reco_dataset, load_field_reco_dataloaders
 from tqdm import tqdm
 
@@ -162,7 +163,19 @@ if __name__ == "__main__":
         
     elif args.test:
         # Call the testing function
-        print("Testing the model...")
-        # test_model(args.model, args.model_path)
+        model_type = config["test"]["model_type"]
+        model_path = config["test"]["model_path"]
+        print(f"Testing model {model_type}...")
+        
+        print(f"📊 Loading data")
+        test_dataloader = load_field_reco_dataloaders(
+            batch_size=batch_size,
+            mode="test",
+            variable=variable,
+            percent=percent,
+        )
+        
+        
+        evaluate(model_type, test_dataloader, model_path)
     else:
         print("No action specified. Use --train or --test.")

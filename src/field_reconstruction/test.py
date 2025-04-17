@@ -7,15 +7,7 @@ from tqdm import tqdm
 from models import FukamiNet, ReconstructionVAE
 from utils import get_device
 from plots_creator import plot_voronoi_reconstruction_comparison
-
-def create_model(model_name, channels=2, latent_dim=128):
-    
-    if model_name == "fukami":
-        return FukamiNet()
-    elif model_name == "vae":
-        return ReconstructionVAE(channels=channels, latent_dim=latent_dim)
-    else:
-        raise ValueError(f"Unknown model type: {model_name}")
+from utils import create_model, get_device
 
 def rrmse(pred, target):
     """
@@ -50,15 +42,19 @@ def mae(pred, target):
     """
     return torch.mean(torch.abs(pred - target))
 
-def evaluate(model, test_loader, model_name, config):
+def evaluate(model_type, test_loader,checkpoint_path):
     device = get_device()
-    model = create_model(model_name).to(device)
+    model = create_model(model_type).to(device)
     
     # Load checkpoint
-    checkpoint_path = config["checkpoint_path"]
+    #Add folder to the path
+    checkpoint_path = os.path.join("models/saves", checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
-
+    print(f"✅ Loaded model from {checkpoint_path}")
+    print(f"✅ Evaluating model on {len(test_loader.dataset)} samples")
+    print(f"✅ Model type: {model_type}")
+    print(f"✅ Device: {device}")
     rrmse_total = 0.0
     mae_total = 0.0
     n = 0
@@ -68,7 +64,7 @@ def evaluate(model, test_loader, model_name, config):
         for inputs, targets in pbar:
             inputs, targets = inputs.to(device), targets.to(device)
 
-            if model_name == "vae":
+            if model_type == "vae":
                 recon_x, mu, logvar = model(inputs)
                 preds = recon_x
             else:
@@ -85,6 +81,7 @@ def evaluate(model, test_loader, model_name, config):
 
     rrmse_avg = rrmse_total / n
     mae_avg = mae_total / n
+    print(f"Evaluation results for {checkpoint_path}:")
     print(f"✅ Test RRMSE: {rrmse_avg:.6f}")
     print(f"✅ Test MAE:   {mae_avg:.6f}")
 

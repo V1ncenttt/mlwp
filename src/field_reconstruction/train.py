@@ -5,18 +5,9 @@ from tqdm import tqdm
 import os
 import random
 import numpy as np
-from models import FukamiNet, ReconstructionVAE
-from utils import get_device
+from utils import get_device, create_model
 from plots_creator import plot_voronoi_reconstruction_comparison
 
-def create_model(model):
-    if model == "fukami":
-        return FukamiNet()
-    elif model == "vae":
-        # Assuming VAE is defined elsewhere
-        return ReconstructionVAE(channels=2, latent_dim=128)
-    else:
-        raise ValueError(f"Unknown model type: {model}")
 
 def get_optimizer(model, config):
     """

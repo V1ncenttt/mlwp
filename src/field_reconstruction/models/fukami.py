@@ -60,10 +60,43 @@ class FukamiResNet(nn.Module): #test
         return self.exit(x)
 
 class FukamiUNet(nn.Module):
-    
-    def __init__(self, *args, **kwargs):
-        super(FukamiUNet, self).__init__(*args, **kwargs)
-    
+    def __init__(self, in_channels=2, out_channels=1, base_channels=64):
+        super(FukamiUNet, self).__init__()
+ 
+        # Encoder
+        self.enc1 = self.conv_block(in_channels, base_channels)
+        self.enc2 = self.conv_block(base_channels, base_channels * 2)
+        self.enc3 = self.conv_block(base_channels * 2, base_channels * 4)
+ 
+        # Decoder
+        self.up2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=2, stride=2)
+        self.dec2 = self.conv_block(base_channels * 4, base_channels * 2)
+        self.up1 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=2, stride=2)
+        self.dec1 = self.conv_block(base_channels * 2, base_channels)
+ 
+        # Output
+        self.final = nn.Conv2d(base_channels, out_channels, kernel_size=1)
+ 
+        self.pool = nn.MaxPool2d(2)
+ 
+    def conv_block(self, in_channels, out_channels):
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True)
+        )
+ 
     def forward(self, x):
-        # Implement the forward pass for the UNet architecture
-        pass
+        # Encoder
+        x1 = self.enc1(x)
+        x2 = self.enc2(self.pool(x1))
+        x3 = self.enc3(self.pool(x2))
+ 
+        # Decoder
+        x = self.up2(x3)
+        x = self.dec2(torch.cat([x, x2], dim=1))
+        x = self.up1(x)
+        x = self.dec1(torch.cat([x, x1], dim=1))
+ 
+        return self.final(x)

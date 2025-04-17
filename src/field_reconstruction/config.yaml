@@ -26,7 +26,7 @@ train:
   scheduler: cosine
   weight_decay: 1e-4
 
-loss: vae_elbo
+loss: mse
 
 logging:
   log_every: 10
@@ -34,7 +34,7 @@ logging:
   use_wandb: true
 
 split_ratio: 0.8
-model: vae
+model: fukami_unet
 percent: 10
 batch_size: 32
 variable: 2m_temperature
@@ -45,3 +45,22 @@ weight_decay: 0.01
 epochs: 10
 tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
+test:
+  test_dataset: 
+  model_path: fukami_resnet_model_10_0.015320.pth
+  model_type: fukami_resnet
+wandb:
+  project: mlwp-thesis-fieldreco
+  entity: your-wandb-username  # replace with your wandb user/org name
+  log_model: true
+  log_data: true
+  log_config: true
+  log_metrics: true
+  log_artifacts: true
+  log_code: true
+  log_hyperparameters: true
+  log_git: true
+  log_env: true
+  log_system: true
+  log_tensorboard: false
+  log_mlflow: false

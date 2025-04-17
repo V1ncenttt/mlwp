@@ -2,7 +2,7 @@ import numpy as np
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
 import torch
-
+from models import FukamiNet, FukamiResNet, FukamiUNet, ReconstructionVAE
 import numpy as np
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
@@ -66,3 +66,15 @@ def get_device():
     """
     return 'cuda' if torch.cuda.is_available() else 'cpu'
 
+def create_model(model):
+    if model == "fukami":
+        return FukamiNet()
+    elif model == "fukami_resnet":
+        return FukamiResNet()
+    elif model == "fukami_unet":
+        return FukamiUNet()
+    elif model == "vae":
+        # Assuming VAE is defined elsewhere
+        return ReconstructionVAE(channels=2, latent_dim=128)
+    else:
+        raise ValueError(f"Unknown model type: {model}")
