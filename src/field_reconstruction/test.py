@@ -30,6 +30,20 @@ def create_model(model_name, channels=2, latent_dim=128):
         raise ValueError(f"Unknown model type: {model_name}")
 
 def rrmse(pred, target):
+    """
+    The function calculates the relative root mean square error between two input tensors.
+    
+    :param pred: The `pred` parameter typically refers to the predicted values from a model, while the
+    `target` parameter refers to the actual target values. The function `rrmse` seems to be calculating
+    the Root Relative Mean Squared Error (RRMSE) between the predicted values and the target values
+    :param target: The `target` parameter typically refers to the ground truth values or the actual
+    values that you are trying to predict or model. In the context of the `rrmse` function you provided,
+    `target` is likely the true target values that you are comparing against the predicted values
+    (`pred`)
+    :return: the Relative Root Mean Squared Error (RRMSE) between the predicted values (pred) and the
+    target values.
+    """
+    
     return torch.sqrt(torch.mean((pred - target) ** 2)) / torch.sqrt(torch.mean(target ** 2))
 
 def mae(pred, target):
