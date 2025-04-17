@@ -42,7 +42,8 @@ def get_optimizer(model, config):
     else:
         raise ValueError(f"Unknown optimizer type: {optimizer}")   
 
-def beta_vae_loss_function(recon_x, x, mu, logvar, beta=1.0):
+def beta_vae_loss_function(recon_x, x, mu, logvar, beta=2):
+
     """
     Compute the beta-VAE loss.
     
@@ -151,7 +152,7 @@ def train(model_name, data, model_save_path, config):
 
             if model_name == "vae" and config["loss"] == "vae_elbo":
                 recon_x, mu, logvar = model(inputs)
-                loss = criterion(recon_x, inputs, mu, logvar)
+                loss = criterion(recon_x, targets, mu, logvar)
             else:
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
@@ -172,7 +173,7 @@ def train(model_name, data, model_save_path, config):
 
                 if model_name == "vae" and config["loss"] == "vae_elbo":
                     recon_x, mu, logvar = model(inputs)
-                    loss = criterion(recon_x, inputs, mu, logvar)
+                    loss = criterion(recon_x, targets, mu, logvar)
                 else:
                     outputs = model(inputs)
                     loss = criterion(outputs, targets)
