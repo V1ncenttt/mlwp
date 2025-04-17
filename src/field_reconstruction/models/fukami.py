@@ -43,7 +43,7 @@ class ResidualBlock(nn.Module):
         out += identity
         return self.relu(out)
 
-class FukamiResNet(nn.Module):
+class FukamiResNet(nn.Module): #test
     def __init__(self, in_channels=2, out_channels=1, hidden_channels=48, num_blocks=6):
         super(FukamiResNet, self).__init__()
         self.entry = nn.Sequential(
