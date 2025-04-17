@@ -9,19 +9,6 @@ from utils import get_device
 from plots_creator import plot_voronoi_reconstruction_comparison
 
 def create_model(model_name, channels=2, latent_dim=128):
-    """_summary_
-
-    Args:
-        model_name (_type_): _description_
-        channels (int, optional): _description_. Defaults to 2.
-        latent_dim (int, optional): _description_. Defaults to 128.
-
-    Raises:
-        ValueError: _description_
-
-    Returns:
-        _type_: _description_
-    """
     if model_name == "fukami":
         return FukamiNet()
     elif model_name == "vae":
