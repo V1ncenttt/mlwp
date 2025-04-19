@@ -52,15 +52,4 @@ test:
 wandb:
   project: mlwp-thesis-fieldreco
   entity: your-wandb-username  # replace with your wandb user/org name
-  log_model: true
-  log_data: true
-  log_config: true
-  log_metrics: true
-  log_artifacts: true
-  log_code: true
-  log_hyperparameters: true
-  log_git: true
-  log_env: true
-  log_system: true
-  log_tensorboard: false
-  log_mlflow: false
+
