@@ -47,8 +47,8 @@ tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
 test:
   test_dataset: 
-  model_path: fukami_resnet_model_10_0.015320.pth
-  model_type: fukami_resnet
+  model_path: vae_model_10_0.121212.pth
+  model_type: vae
 wandb:
   project: mlwp-thesis-fieldreco
   entity: your-wandb-username  # replace with your wandb user/org name

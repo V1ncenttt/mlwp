@@ -8,6 +8,7 @@ from models import FukamiNet, ReconstructionVAE
 from utils import get_device
 from plots_creator import plot_voronoi_reconstruction_comparison
 from utils import create_model, get_device
+from scipy.interpolate import griddata
 
 def rrmse(pred, target):
     """
@@ -42,8 +43,63 @@ def mae(pred, target):
     """
     return torch.mean(torch.abs(pred - target))
 
+def evaluate_interp(test_loader, mode:int=3):
+    device = get_device()
+    
+    print(f"✅ Evaluating model on {len(test_loader.dataset)} samples")
+    print(f"✅ Model type: Interpolation (order {mode})")
+    print(f"✅ Device: {device}")
+    
+    rrmse_total = 0.0
+    mae_total = 0.0
+    n = 0
+    
+    with torch.no_grad():
+        pbar = tqdm(test_loader, desc="Testing")
+        for inputs, targets in pbar:
+            inputs, targets = inputs.to(device), targets.to(device)
+            
+            inputs_np = inputs.cpu().numpy()
+            targets_np = targets.cpu().numpy()
+            
+            # Get voronoi-tessellated values and mask
+            tess = inputs_np[:, 0, :, :]  # batch x H x W
+            mask = inputs_np[:, 1, :, :]  # batch x H x W
+            
+            preds = []
+            for i in range(tess.shape[0]):
+                H, W = tess[i].shape
+                yx = np.argwhere(mask[i] > 0)
+                values = tess[i][mask[i] > 0]
+                
+                grid_y, grid_x = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
+                interp = griddata(yx, values, (grid_y, grid_x), method='cubic', fill_value=0.0)
+                preds.append(torch.tensor(interp, dtype=torch.float32))
+            
+            preds = torch.stack(preds).unsqueeze(1).to(device)
+            rrmse_batch = rrmse(preds, targets).item()
+            mae_batch = mae(preds, targets).item()
+            
+            rrmse_total += rrmse_batch * inputs.size(0)
+            mae_total += mae_batch * inputs.size(0)
+            n += inputs.size(0)
+            
+            pbar.set_postfix({"RRMSE": rrmse_batch, "MAE": mae_batch})
+
+    rrmse_avg = rrmse_total / n
+    mae_avg = mae_total / n
+    print(f"✅ Interpolation Test RRMSE: {rrmse_avg:.6f}")
+    print(f"✅ Interpolation Test MAE:   {mae_avg:.6f}")
+
+    return {"rrmse": rrmse_avg, "mae": mae_avg}
+
 def evaluate(model_type, test_loader,checkpoint_path):
     device = get_device()
+    
+    if model_type == "cubic_interpolation":
+        evaluate_interp(test_loader, mode=3)
+        return
+        
     model = create_model(model_type).to(device)
     
     # Load checkpoint
