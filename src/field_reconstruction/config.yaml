@@ -26,7 +26,7 @@ train:
   scheduler: cosine
   weight_decay: 1e-4
 
-loss: mse
+loss: vae_elbo
 
 logging:
   log_every: 10
@@ -34,7 +34,7 @@ logging:
   use_wandb: true
 
 split_ratio: 0.8
-model: fukami_unet
+model: vae
 percent: 10
 batch_size: 32
 variable: 2m_temperature
@@ -47,7 +47,7 @@ tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
 test:
   test_dataset: 
-  model_path: vae_model_10_0.121212.pth
+  model_path: vae_model_10_0.012981.pth
   model_type: vae
 wandb:
   project: mlwp-thesis-fieldreco

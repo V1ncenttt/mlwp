@@ -33,7 +33,7 @@ def get_optimizer(model, config):
     else:
         raise ValueError(f"Unknown optimizer type: {optimizer}")   
 
-def beta_vae_loss_function(recon_x, x, mu, logvar, beta=2):
+def beta_vae_loss_function(recon_x, x, mu, logvar, beta=0):
 
     """
     Compute the beta-VAE loss.
