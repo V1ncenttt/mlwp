@@ -115,13 +115,17 @@ def train(model_name, data, model_save_path, config):
         config: Configuration parameters (dict).
     """
     device = get_device()
-    model = create_model(model_name).to(device)
-    criterion = get_loss_function(config)
-    optimizer = get_optimizer(model, config)
-    epochs = config["epochs"]
     
     train_loader = data["train_loader"]
     val_loader = data["val_loader"]
+    
+    sample_input, _ = next(iter(train_loader))
+    nb_channels = sample_input.shape[1]
+    
+    model = create_model(model_name, nb_channels=nb_channels).to(device)
+    criterion = get_loss_function(config)
+    optimizer = get_optimizer(model, config)
+    epochs = config["epochs"]
 
     print(f"📊 Number of training samples: {len(train_loader.dataset)}")
     print(f"📊 Number of validation samples: {len(val_loader.dataset)}")

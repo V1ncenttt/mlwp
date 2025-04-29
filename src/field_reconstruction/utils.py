@@ -66,15 +66,16 @@ def get_device():
     """
     return 'cuda' if torch.cuda.is_available() else 'cpu'
 
-def create_model(model):
+def create_model(model, nb_channels=2):
     if model == "fukami":
-        return FukamiNet()
+        return FukamiNet(in_channels=nb_channels, out_channels=nb_channels-1)
     elif model == "fukami_resnet":
-        return FukamiResNet()
+        return FukamiResNet(in_channels=nb_channels, out_channels=nb_channels-1)
     elif model == "fukami_unet":
-        return FukamiUNet()
+        return FukamiUNet(in_channels=nb_channels, out_channels=nb_channels-1)
+    elif model == "vitae_sl":
+        return None
     elif model == "vae":
-        # Assuming VAE is defined elsewhere
-        return ReconstructionVAE(channels=2, latent_dim=128)
+        return ReconstructionVAE(in_channels=nb_channels, out_channels=nb_channels-1, latent_dim=128)
     else:
         raise ValueError(f"Unknown model type: {model}")

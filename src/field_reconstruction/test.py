@@ -9,6 +9,7 @@ from utils import get_device
 from plots_creator import plot_voronoi_reconstruction_comparison
 from utils import create_model, get_device
 from scipy.interpolate import griddata
+from skimage.metrics import structural_similarity as ssim
 
 def rrmse(pred, target):
     """
@@ -93,17 +94,17 @@ def evaluate_interp(test_loader, mode:int=3):
 
     return {"rrmse": rrmse_avg, "mae": mae_avg}
 
-def evaluate(model_type, test_loader,checkpoint_path):
+def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
     device = get_device()
-    
+
     if model_type == "cubic_interpolation":
         evaluate_interp(test_loader, mode=3)
         return
-        
-    model = create_model(model_type).to(device)
-    
+
+    nb_channels = 2
+    model = create_model(model_type, nb_channels=nb_channels).to(device)
+
     # Load checkpoint
-    #Add folder to the path
     checkpoint_path = os.path.join("models/saves", checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
@@ -111,9 +112,11 @@ def evaluate(model_type, test_loader,checkpoint_path):
     print(f"✅ Evaluating model on {len(test_loader.dataset)} samples")
     print(f"✅ Model type: {model_type}")
     print(f"✅ Device: {device}")
-    rrmse_total = 0.0
-    mae_total = 0.0
-    n = 0
+
+    rrmse_total = []
+    mae_total = []
+    ssim_total = []
+    n_total = 0
 
     with torch.no_grad():
         pbar = tqdm(test_loader, desc="Testing")
@@ -126,19 +129,59 @@ def evaluate(model_type, test_loader,checkpoint_path):
             else:
                 preds = model(inputs)
 
-            rrmse_batch = rrmse(preds, targets).item()
-            mae_batch = mae(preds, targets).item()
-            
-            rrmse_total += rrmse_batch * inputs.size(0)
-            mae_total += mae_batch * inputs.size(0)
-            n += inputs.size(0)
+            batch_size, nb_channels, H, W = targets.shape
+            rrmse_batch = []
+            mae_batch = []
+            ssim_batch = []
 
-            pbar.set_postfix({"RRMSE": rrmse_batch, "MAE": mae_batch})
+            preds_np = preds.detach().cpu().numpy()
+            targets_np = targets.detach().cpu().numpy()
 
-    rrmse_avg = rrmse_total / n
-    mae_avg = mae_total / n
-    print(f"Evaluation results for {checkpoint_path}:")
-    print(f"✅ Test RRMSE: {rrmse_avg:.6f}")
-    print(f"✅ Test MAE:   {mae_avg:.6f}")
+            for v in range(nb_channels):
+                preds_v = preds_np[:, v, :, :]
+                targets_v = targets_np[:, v, :, :]
 
-    return {"rrmse": rrmse_avg, "mae": mae_avg}
+                rrmse_val = np.sqrt(np.mean((preds_v - targets_v) ** 2)) / (np.sqrt(np.mean(targets_v ** 2)) + 1e-8)
+                mae_val = np.mean(np.abs(preds_v - targets_v))
+                ssim_val = np.mean([
+                    ssim(preds_v[i], targets_v[i], data_range=targets_v[i].max() - targets_v[i].min() + 1e-8)
+                    for i in range(preds_v.shape[0])
+                ])
+
+                rrmse_batch.append(rrmse_val)
+                mae_batch.append(mae_val)
+                ssim_batch.append(ssim_val)
+
+            rrmse_total.append(np.array(rrmse_batch) * batch_size)
+            mae_total.append(np.array(mae_batch) * batch_size)
+            ssim_total.append(np.array(ssim_batch) * batch_size)
+            n_total += batch_size
+
+            pbar.set_postfix({
+                "RRMSE": np.mean(rrmse_batch),
+                "MAE": np.mean(mae_batch),
+                "SSIM": np.mean(ssim_batch)
+            })
+
+    rrmse_total = np.sum(rrmse_total, axis=0) / n_total
+    mae_total = np.sum(mae_total, axis=0) / n_total
+    ssim_total = np.sum(ssim_total, axis=0) / n_total
+
+    if variable_names is None:
+        variable_names = [f"Var{i}" for i in range(len(rrmse_total))]
+
+    print("📈 Per-variable Metrics:")
+    for idx, var in enumerate(variable_names):
+        print(f"✅ {var}: RRMSE={rrmse_total[idx]:.4f}, MAE={mae_total[idx]:.4f}, SSIM={ssim_total[idx]:.4f}")
+
+    print("\n📊 Overall Averages:")
+    print(f"✅ Avg RRMSE={np.mean(rrmse_total):.4f}, Avg MAE={np.mean(mae_total):.4f}, Avg SSIM={np.mean(ssim_total):.4f}")
+
+    return {
+        "rrmse": np.mean(rrmse_total),
+        "mae": np.mean(mae_total),
+        "ssim": np.mean(ssim_total),
+        "rrmse_per_var": rrmse_total,
+        "mae_per_var": mae_total,
+        "ssim_per_var": ssim_total,
+    }

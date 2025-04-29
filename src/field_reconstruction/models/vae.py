@@ -19,14 +19,14 @@ class ConvolutionalBlock(nn.Module):
     
 class ReconstructionVAE(nn.Module):
     
-    def __init__(self, channels, latent_dim):
+    def __init__(self, in_channels, out_channels, latent_dim):
         super(ReconstructionVAE, self).__init__()
         self.latent_dim = latent_dim
-        self.channels = channels
+        self.channels = in_channels
 
         # 64x32 input
         self.encoder = nn.Sequential(
-            self.make_layer_encode(ConvolutionalBlock, in_channel=channels, out_channel=32, stride=2, num_blocks=1, expand_ratio=1),  # 64x32 → 32x16
+            self.make_layer_encode(ConvolutionalBlock, in_channel=in_channels, out_channel=32, stride=2, num_blocks=1, expand_ratio=1),  # 64x32 → 32x16
             self.make_layer_encode(ConvolutionalBlock, in_channel=32, out_channel=64, stride=2, num_blocks=1, expand_ratio=1),         # 32x16 → 16x8
             nn.Flatten()
         )
@@ -43,7 +43,7 @@ class ReconstructionVAE(nn.Module):
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(32, 1, kernel_size=4, stride=2, padding=1)  # Output only 1 channel
+            nn.ConvTranspose2d(32, out_channels, kernel_size=4, stride=2, padding=1)  # Output only 1 channel
         )
 
     

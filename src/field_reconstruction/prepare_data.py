@@ -2,18 +2,22 @@ import os
 import numpy as np
 import xarray as xr
 import torch
-from torch.utils.data import random_split
+from torch.utils.data import random_split, DataLoader, TensorDataset
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
-from torch.utils.data import DataLoader, random_split, TensorDataset
 from tqdm import tqdm
 from utils import sample_sensor_locations, voronoi_tesselate
 
-
-
 def create_and_save_field_reco_dataset(
     path_to_nc,
-    variable="2m_temperature",
+    variables=[
+        "2m_temperature",
+        "10m_u_component_of_wind",
+        "10m_v_component_of_wind",
+        "mean_sea_level_pressure",
+        "total_column_water_vapour"
+    ],
+    mode="voronoi",
     percent=10,
     train_split=0.8,
     output_dir="../../data/weatherbench2_fieldreco/",
@@ -22,32 +26,60 @@ def create_and_save_field_reco_dataset(
     os.makedirs(output_dir, exist_ok=True)
     print("🔍 Loading data...")
     ds = xr.open_dataset(path_to_nc)
-    data = ds[variable].values  # shape: (T, H, W)
-
-    T, H, W = data.shape
+    
+    T, H, W = ds[variables[0]].shape
     n_sensors = int((percent / 100) * H * W)
     print(f"Using {n_sensors} sensors per timestep ({percent}%)")
-
+    
     X = []
     Y = []
 
     rng = np.random.default_rng(seed)
-
-    for t in range(T - 1):  # leave one out in case of future prediction
-        field = data[t]
-        field = (field - np.nanmean(field)) / np.nanstd(field)  # normalize
-        field = np.nan_to_num(field, nan=0.0)
-
+    print("🔄 Normalizing and preparing samples...")
+    for t in tqdm(range(T - 1), desc="Preparing samples"):
+        fields = []
+        for var in variables:
+            field = ds[var].isel(time=t).values
+            field = (field - np.nanmean(field)) / np.nanstd(field)
+            field = np.nan_to_num(field, nan=0.0)
+            fields.append(field)
+        
         sensor_coords = sample_sensor_locations((H, W), n_sensors, seed=seed + t)
-        sensor_values = np.array([field[y, x] for (y, x) in sensor_coords])
+        
+        print(f"🔄 Using mode {mode}")
+        if mode == "voronoi":
+            
+            tess_fields = []
+            for field in fields:
+                sensor_values = np.array([field[y, x] for (y, x) in sensor_coords])
+                tess = voronoi_tesselate(sensor_coords, sensor_values, (H, W))
+                tess_fields.append(tess)
+            
+            mask = np.zeros((H, W), dtype=np.float32)
+            for y, x in sensor_coords:
+                mask[y, x] = 1.0
 
-        tess = voronoi_tesselate(sensor_coords, sensor_values, (H, W))
-        mask = np.zeros((H, W), dtype=np.float32)
-        for y, x in sensor_coords:
-            mask[y, x] = 1.0
+            x = np.stack([mask] + tess_fields, axis=0)  # (1+Nvars, H, W)
+            y = np.stack(fields, axis=0)                # (Nvars, H, W)
+        
+        elif mode == "vitae":
+            print
+            I_fields = []
+            for field in fields:
+                I = np.zeros((H, W), dtype=np.float32)
+                for (y, x) in sensor_coords:
+                    I[y, x] = field[y, x]
+                I_fields.append(I)
 
-        x = np.stack([tess, mask], axis=0)  # shape: (2, H, W)
-        y = field[np.newaxis, :, :]         # shape: (1, H, W)
+            mask = np.zeros((H, W), dtype=np.float32)
+            for y, x in sensor_coords:
+                mask[y, x] = 1.0
+
+            x = np.stack(I_fields + [mask], axis=0)  # (Nvars+1, H, W)
+            y = np.stack(fields, axis=0)             # (Nvars, H, W)
+        
+        else:
+            raise ValueError("Unknown mode: choose 'voronoi' or 'vitae'.")
 
         X.append(torch.tensor(x, dtype=torch.float32))
         Y.append(torch.tensor(y, dtype=torch.float32))
@@ -66,8 +98,8 @@ def create_and_save_field_reco_dataset(
     train_data = {"X": train_X, "Y": train_Y}
     test_data = {"X": test_X, "Y": test_Y}
 
-    var_tag = variable.replace("/", "_")
-    base_name = f"{var_tag}_{percent}p"
+    var_tag = "_".join([v.replace("/", "_") for v in variables])
+    base_name = f"{var_tag}_{percent}p_{mode}_{len(variables)}vars"
 
     train_path = os.path.join(output_dir, f"{base_name}_train.pt")
     test_path = os.path.join(output_dir, f"{base_name}_test.pt")
@@ -76,25 +108,25 @@ def create_and_save_field_reco_dataset(
     torch.save(train_data, train_path)
     torch.save(test_data, test_path)
     print("✅ Done.")
-    
+
 def load_field_reco_dataloaders(
-    variable,
-    mode="train",            # "train" or "test"
+    variable_list,
+    mode="train",
+    reco_mode="voronoi",
     percent=10,
     batch_size=32,
-    split_ratio=0.9,         # train/val split
+    split_ratio=0.9,
     seed=42,
     data_dir="../../data/weatherbench2_fieldreco/"
 ):
-    var_tag = variable.replace("/", "_")
-    base_name = f"{var_tag}_{percent}p"
+    var_tag = "_".join([v.replace("/", "_") for v in variable_list])
+    base_name = f"{var_tag}_{percent}p_{reco_mode}_{len(variable_list)}vars"
 
     if mode == "train":
         path = os.path.join(data_dir, f"{base_name}_train.pt")
         data = torch.load(path)
         dataset = TensorDataset(data["X"], data["Y"])
 
-        # Train/val split
         total = len(dataset)
         n_train = int(total * split_ratio)
         n_val = total - n_train
