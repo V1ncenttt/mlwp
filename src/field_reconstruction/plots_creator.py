@@ -117,3 +117,47 @@ def plot_voronoi_reconstruction_comparison(voronoi_mask, ground_truth, cnn_outpu
         plt.show()
 
     plt.close()
+    
+    
+def plot_l2_error_distributions(l2_errors_dict, variable_names, model_name, save_dir):
+    """
+    Create grid plot of L2 error distributions for each variable with mean line.
+
+    Args:
+        l2_errors_dict: dict where keys are variable names and values are arrays of L2 errors.
+        variable_names: list of variable names to include in the plot (should match keys).
+        model_name: string name of the model to include in the plot title.
+        save_dir: path to save the resulting PNG file.
+    """
+    num_vars = len(variable_names)
+    cols = 2
+    rows = (num_vars + 1) // cols
+
+    fig, axs = plt.subplots(rows, cols, figsize=(10, 4 * rows))
+    axs = axs.flatten()
+
+    for i, var in enumerate(variable_names):
+        ax = axs[i]
+        errors = np.array(l2_errors_dict[var])
+        mean_err = np.mean(errors)
+
+        ax.hist(errors, bins=50, color='steelblue', edgecolor='black')
+        ax.axvline(mean_err, color='red', linewidth=2)
+        ax.text(mean_err, ax.get_ylim()[1] * 0.9, f"{mean_err*100:.2f}%", color='red', ha='center', fontsize=10)
+        ax.set_title(var, fontsize=12)
+        ax.set_xlabel("Relative L2 Error")
+        ax.set_ylabel("Frequency")
+
+    # Remove unused subplots if any
+    for j in range(len(variable_names), len(axs)):
+        fig.delaxes(axs[j])
+
+    fig.suptitle(f"Relative L2 error — {model_name}", fontsize=16)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"{model_name}_l2_error_distributions.png")
+    plt.savefig(save_path, dpi=200)
+    print(f"📊 L2 error distribution plot saved to {save_path}")
+    plt.close()
+    
