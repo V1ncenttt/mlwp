@@ -67,7 +67,7 @@ def main():
     split_ratio = config["split_ratio"]
     model = config["model"]
     reco_mode = get_dataset_mode(model)
-    nb_channels = len(variables) + 1  # +1 for the mask
+   
 
     dataset_train_path = os.path.join(
         output_dir,
@@ -92,9 +92,9 @@ def main():
         print(f"🚂 Training model: {model}...")
 
         train_loader, val_loader = load_field_reco_dataloaders(
+            variable_list=variables,
             batch_size=batch_size,
             mode="train",
-            variables=variables,
             percent=percent,
             split_ratio=split_ratio,
             reco_mode=reco_mode,
@@ -109,9 +109,9 @@ def main():
 
         print(f"📊 Loading test data...")
         test_loader = load_field_reco_dataloaders(
+            variable_list=variables,
             batch_size=batch_size,
             mode="test",
-            variables=variables,
             percent=percent,
             reco_mode=reco_mode,
         )

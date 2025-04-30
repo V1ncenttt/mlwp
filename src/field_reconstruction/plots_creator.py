@@ -135,8 +135,9 @@ def plot_l2_error_distributions(l2_errors_dict, variable_names, model_name, save
 
     fig, axs = plt.subplots(rows, cols, figsize=(10, 4 * rows))
     axs = axs.flatten()
-
+    
     for i, var in enumerate(variable_names):
+        print(var)
         ax = axs[i]
         errors = np.array(l2_errors_dict[var])
         mean_err = np.mean(errors)

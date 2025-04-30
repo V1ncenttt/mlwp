@@ -6,6 +6,7 @@ import os
 import random
 import numpy as np
 from utils import get_device, create_model
+import matplotlib.pyplot as plt
 from plots_creator import plot_voronoi_reconstruction_comparison
 
 

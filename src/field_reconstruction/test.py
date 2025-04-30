@@ -5,8 +5,9 @@ import os
 import numpy as np
 from tqdm import tqdm
 from models import FukamiNet, ReconstructionVAE
+import matplotlib.pyplot as plt
 from utils import get_device
-from plots_creator import plot_voronoi_reconstruction_comparison
+from plots_creator import plot_voronoi_reconstruction_comparison, plot_l2_error_distributions
 from utils import create_model, get_device
 from scipy.interpolate import griddata
 from skimage.metrics import structural_similarity as ssim
@@ -95,16 +96,17 @@ def evaluate_interp(test_loader, mode:int=3):
     return {"rrmse": rrmse_avg, "mae": mae_avg}
 
 def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
+    from pathlib import Path  # <-- make sure this is imported
     device = get_device()
 
     if model_type == "cubic_interpolation":
         evaluate_interp(test_loader, mode=3)
         return
 
-    nb_channels = 2
+    sample_input, _ = next(iter(test_loader))
+    nb_channels = sample_input.shape[1]
     model = create_model(model_type, nb_channels=nb_channels).to(device)
 
-    # Load checkpoint
     checkpoint_path = os.path.join("models/saves", checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
@@ -113,9 +115,8 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
     print(f"✅ Model type: {model_type}")
     print(f"✅ Device: {device}")
 
-    rrmse_total = []
-    mae_total = []
-    ssim_total = []
+    rrmse_total, mae_total, ssim_total = [], [], []
+    l2_errors = [[] for _ in range(nb_channels)]
     n_total = 0
 
     with torch.no_grad():
@@ -130,9 +131,7 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
                 preds = model(inputs)
 
             batch_size, nb_channels, H, W = targets.shape
-            rrmse_batch = []
-            mae_batch = []
-            ssim_batch = []
+            rrmse_batch, mae_batch, ssim_batch = [], [], []
 
             preds_np = preds.detach().cpu().numpy()
             targets_np = targets.detach().cpu().numpy()
@@ -147,6 +146,8 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
                     ssim(preds_v[i], targets_v[i], data_range=targets_v[i].max() - targets_v[i].min() + 1e-8)
                     for i in range(preds_v.shape[0])
                 ])
+                l2_vals = np.mean((preds_v - targets_v) ** 2, axis=(1, 2))
+                l2_errors[v].extend(l2_vals.tolist())
 
                 rrmse_batch.append(rrmse_val)
                 mae_batch.append(mae_val)
@@ -177,6 +178,14 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
     print("\n📊 Overall Averages:")
     print(f"✅ Avg RRMSE={np.mean(rrmse_total):.4f}, Avg MAE={np.mean(mae_total):.4f}, Avg SSIM={np.mean(ssim_total):.4f}")
 
+    # Convert to dict
+    l2_errors_dict = {var: l2_errors[i] for i, var in enumerate(variable_names)}
+
+    # 📊 Plot L2 Error Distributions
+    save_dir = Path("plots/evaluation")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    plot_l2_error_distributions(l2_errors_dict, variable_names, model_type, str(save_dir),)
+
     return {
         "rrmse": np.mean(rrmse_total),
         "mae": np.mean(mae_total),
@@ -184,4 +193,5 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
         "rrmse_per_var": rrmse_total,
         "mae_per_var": mae_total,
         "ssim_per_var": ssim_total,
+        "l2_per_var": l2_errors,
     }

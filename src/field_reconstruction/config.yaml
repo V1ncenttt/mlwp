@@ -18,13 +18,6 @@ data:
   resolution: 5.625deg
   variables: [t2m, u10, v10]
 
-train:
-  epochs: 50
-  batch_size: 32
-  learning_rate: 0.0003
-  optimizer: adamw
-  scheduler: cosine
-  weight_decay: 1e-4
 
 loss: mse # Select from mse, mae, vae_elbo, smooth_l1, etc.
 
@@ -42,13 +35,13 @@ output_dir: ../../data/weatherbench2_fieldreco/
 optimizer: adam
 learning_rate: 0.001
 weight_decay: 0.01
-epochs: 10
+epochs: 25
 tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
 test:
   test_dataset: 
-  model_path: vae_model_10_0.012981.pth
-  model_type: vae
+  model_path: fukami_unet_model_25_0.098713.pth
+  model_type: fukami_unet
 wandb:
   project: mlwp-thesis-fieldreco
   entity: your-wandb-username  # replace with your wandb user/org name
