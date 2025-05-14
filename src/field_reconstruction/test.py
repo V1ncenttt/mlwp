@@ -7,10 +7,30 @@ from tqdm import tqdm
 from models import FukamiNet, ReconstructionVAE
 import matplotlib.pyplot as plt
 from utils import get_device
-from plots_creator import plot_voronoi_reconstruction_comparison, plot_l2_error_distributions
+from plots_creator import plot_random_reconstruction, plot_l2_error_distributions
 from utils import create_model, get_device
 from scipy.interpolate import griddata
 from skimage.metrics import structural_similarity as ssim
+from pykrige.ok import OrdinaryKriging
+
+from pathlib import Path  # <-- make sure this is imported
+
+def kriging_interpolation(yx, values, H, W, model='linear'):
+    x = yx[:, 1].astype(np.float64)
+    y = yx[:, 0].astype(np.float64)
+    z = values.astype(np.float64)
+
+    gridx = np.linspace(0, W - 1, W)
+    gridy = np.linspace(0, H - 1, H)
+
+    try:
+        ok = OrdinaryKriging(x, y, z, variogram_model=model, verbose=False)
+        interp, _ = ok.execute('grid', gridx, gridy)
+    except Exception as e:
+        print(f"Kriging failed: {e}")
+        interp = np.zeros((H, W))  # fallback
+
+    return interp
 
 def rrmse(pred, target):
     """
@@ -45,66 +65,156 @@ def mae(pred, target):
     """
     return torch.mean(torch.abs(pred - target))
 
-def evaluate_interp(test_loader, mode:int=3):
+def evaluate_interp(test_loader, mode: str = 'cubic', nb_channels: int = 2, variable_names=None):
     device = get_device()
-    
+
     print(f"✅ Evaluating model on {len(test_loader.dataset)} samples")
-    print(f"✅ Model type: Interpolation (order {mode})")
+    print(f"✅ Model type: Interpolation ({mode})")
     print(f"✅ Device: {device}")
     
-    rrmse_total = 0.0
-    mae_total = 0.0
+    rrmse_total = []
+    mae_total = []
+    ssim_total = []
+    l2_errors = [[] for _ in range(nb_channels)]
     n = 0
-    
+    num_vars = None
+
     with torch.no_grad():
         pbar = tqdm(test_loader, desc="Testing")
+
         for inputs, targets in pbar:
             inputs, targets = inputs.to(device), targets.to(device)
-            
-            inputs_np = inputs.cpu().numpy()
-            targets_np = targets.cpu().numpy()
-            
-            # Get voronoi-tessellated values and mask
-            tess = inputs_np[:, 0, :, :]  # batch x H x W
-            mask = inputs_np[:, 1, :, :]  # batch x H x W
-            
+            inputs_np = inputs.cpu().numpy()   # (B, 1 + Nvars, H, W)
+            targets_np = targets.cpu().numpy() # (B, Nvars, H, W)
+
+            B, C, H, W = inputs_np.shape
+            num_vars = C - 1  # First channel is the shared mask
+
             preds = []
-            for i in range(tess.shape[0]):
-                H, W = tess[i].shape
-                yx = np.argwhere(mask[i] > 0)
-                values = tess[i][mask[i] > 0]
+
+            for i in range(B):
+                mask = inputs_np[i, 0, :, :]  # shape: (H, W)
+                yx = np.argwhere(mask > 0)
+
+                pred_sample = []
+                for v in range(num_vars):
+                    voronoi = inputs_np[i, v + 1, :, :]  # v-th variable's tessellated field
+                    values = voronoi[mask > 0]
+
+                    grid_y, grid_x = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
+                    if mode in ['linear', 'cubic']:
+                        interp = griddata(yx, values, (grid_y, grid_x), method=mode, fill_value=0.0)
+                    elif mode == "kriging":
+                        interp = kriging_interpolation(yx, values, H, W)
+                    pred_sample.append(torch.tensor(interp, dtype=torch.float32))
+
+                preds.append(torch.stack(pred_sample))  # (Nvars, H, W)
+
+            preds = torch.stack(preds).to(device)  # (B, Nvars, H, W)
+
+            rrmse_batch = []
+            mae_batch = []
+            ssim_batch = []
+
+            for v in range(num_vars):
+                pred_v = preds[:, v, :, :]
+                target_v = targets[:, v, :, :]
+
+                rrmse_v = rrmse(pred_v, target_v).item()
+                mae_v = mae(pred_v, target_v).item()
+                ssim_v = np.mean([
+                    ssim(
+                        pred_v[i].cpu().numpy().astype(np.float32),
+                        target_v[i].cpu().numpy().astype(np.float32),
+                        data_range=(target_v[i].max() - target_v[i].min() + 1e-8).item()
+                    )
+                    for i in range(pred_v.shape[0])
+                ])
+
+                l2_v = ((pred_v - target_v) ** 2).mean(dim=(1, 2))
+                l2_errors[v].extend(l2_v.tolist())
                 
-                grid_y, grid_x = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
-                interp = griddata(yx, values, (grid_y, grid_x), method='cubic', fill_value=0.0)
-                preds.append(torch.tensor(interp, dtype=torch.float32))
-            
-            preds = torch.stack(preds).unsqueeze(1).to(device)
-            rrmse_batch = rrmse(preds, targets).item()
-            mae_batch = mae(preds, targets).item()
-            
-            rrmse_total += rrmse_batch * inputs.size(0)
-            mae_total += mae_batch * inputs.size(0)
-            n += inputs.size(0)
-            
-            pbar.set_postfix({"RRMSE": rrmse_batch, "MAE": mae_batch})
+                rrmse_batch.append(rrmse_v)
+                mae_batch.append(mae_v)
+                ssim_batch.append(ssim_v)
+                
 
-    rrmse_avg = rrmse_total / n
-    mae_avg = mae_total / n
-    print(f"✅ Interpolation Test RRMSE: {rrmse_avg:.6f}")
-    print(f"✅ Interpolation Test MAE:   {mae_avg:.6f}")
+            rrmse_total.append(np.array(rrmse_batch) * B)
+            mae_total.append(np.array(mae_batch) * B)
+            ssim_total.append(np.array(ssim_batch) * B)
+            n += B
 
-    return {"rrmse": rrmse_avg, "mae": mae_avg}
+            pbar.set_postfix({
+                "RRMSE": np.mean(rrmse_batch),
+                "MAE": np.mean(mae_batch),
+            })
+
+    rrmse_total = np.sum(rrmse_total, axis=0) / n
+    mae_total = np.sum(mae_total, axis=0) / n
+    ssim_total = np.sum(ssim_total, axis=0) / n
+
+    if variable_names is None:
+        variable_names = [f"Var{i}" for i in range(len(rrmse_total))]
+
+    print("📈 Per-variable Metrics:")
+    for idx, var in enumerate(variable_names):
+        print(f"✅ {var}: RRMSE={rrmse_total[idx]:.4f}, MAE={mae_total[idx]:.4f}, SSIM={ssim_total[idx]:.4f}")
+
+    print("\n📊 Overall Averages:")
+    print(f"✅ Avg RRMSE={np.mean(rrmse_total):.4f}, Avg MAE={np.mean(mae_total):.4f}, Avg SSIM={np.mean(ssim_total):.4f}")
+
+    # Convert to dict
+    l2_errors_dict = {var: l2_errors[i] for i, var in enumerate(variable_names)}
+
+    # 📊 Plot L2 Error Distributions
+    save_dir = Path("plots/evaluation")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    
+    if mode == "kriging":
+        plot_l2_error_distributions(l2_errors_dict, variable_names, "Kriging", str(save_dir),)
+        plot_random_reconstruction(
+            model="kriging",
+            val_loader=test_loader,
+            device=device,
+            model_name="kriging",
+            save_dir=str(save_dir),
+            num_samples=7
+        )
+    elif mode == "cubic":
+        plot_l2_error_distributions(l2_errors_dict, variable_names, "Cubic_Interpolation", str(save_dir),)
+        plot_random_reconstruction(
+            model="cubic_interpolation",
+            val_loader=test_loader,
+            device=device,
+            model_name="cubic_interpolation",
+            save_dir=str(save_dir),
+            num_samples=7
+        )
+    
+    return {
+        "rrmse": np.mean(rrmse_total),
+        "mae": np.mean(mae_total),
+        "ssim": np.mean(ssim_total),
+        "rrmse_per_var": rrmse_total,
+        "mae_per_var": mae_total,
+        "ssim_per_var": ssim_total,
+        "l2_per_var": l2_errors,
+    }
 
 def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
-    from pathlib import Path  # <-- make sure this is imported
+    
     device = get_device()
-
-    if model_type == "cubic_interpolation":
-        evaluate_interp(test_loader, mode=3)
-        return
-
     sample_input, _ = next(iter(test_loader))
     nb_channels = sample_input.shape[1]
+
+    if model_type == "cubic_interpolation":
+        evaluate_interp(test_loader, mode=3, nb_channels=nb_channels, variable_names=variable_names)
+        return
+    elif model_type == "kriging":
+        evaluate_interp(test_loader, mode="kriging", nb_channels=nb_channels, variable_names=variable_names)
+        return
+
     model = create_model(model_type, nb_channels=nb_channels).to(device)
 
     checkpoint_path = os.path.join("models/saves", checkpoint_path)

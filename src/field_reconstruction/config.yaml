@@ -27,7 +27,7 @@ logging:
   use_wandb: true
 
 split_ratio: 0.8
-model: fukami_unet
+model: fukami
 percent: 10
 batch_size: 32
 variables: 5vars_2d
@@ -40,8 +40,9 @@ tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
 test:
   test_dataset: 
-  model_path: fukami_unet_model_25_0.098713.pth
-  model_type: fukami_unet
+  model_path: fukami_model_25_0.125745.pth
+  model_type: kriging
+
 wandb:
   project: mlwp-thesis-fieldreco
   entity: your-wandb-username  # replace with your wandb user/org name

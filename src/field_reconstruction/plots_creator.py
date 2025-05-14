@@ -1,6 +1,27 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import torch
+import random
+from scipy.interpolate import griddata
+from pykrige.ok import OrdinaryKriging
+
+def kriging_interpolation(yx, values, H, W, model='linear'):
+    x = yx[:, 1].astype(np.float64)
+    y = yx[:, 0].astype(np.float64)
+    z = values.astype(np.float64)
+
+    gridx = np.arange(W, dtype=float)
+    gridy = np.arange(H, dtype=float)
+
+    try:
+        ok = OrdinaryKriging(x, y, z, variogram_model=model, verbose=False)
+        interp, _ = ok.execute('grid', gridx, gridy)
+    except Exception as e:
+        print(f"Kriging failed: {e}")
+        interp = np.zeros((H, W))  # fallback
+
+    return interp
 
 def plot_sparse_field(sensor_coords, sensor_values, grid_shape, title="Sparse Sensor Field", save_path=None):
     """
@@ -140,11 +161,15 @@ def plot_l2_error_distributions(l2_errors_dict, variable_names, model_name, save
         print(var)
         ax = axs[i]
         errors = np.array(l2_errors_dict[var])
+        
         mean_err = np.mean(errors)
+        median_err = np.median(errors)
 
         ax.hist(errors, bins=50, color='steelblue', edgecolor='black')
         ax.axvline(mean_err, color='red', linewidth=2)
         ax.text(mean_err, ax.get_ylim()[1] * 0.9, f"{mean_err*100:.2f}%", color='red', ha='center', fontsize=10)
+        ax.text(median_err, ax.get_ylim()[1] * 0.8, f"{median_err*100:.2f}%", color='orange', ha='center', fontsize=10)
+        ax.axvline(median_err, color='orange', linewidth=2)
         ax.set_title(var, fontsize=12)
         ax.set_xlabel("Relative L2 Error")
         ax.set_ylabel("Frequency")
@@ -162,3 +187,84 @@ def plot_l2_error_distributions(l2_errors_dict, variable_names, model_name, save
     print(f"📊 L2 error distribution plot saved to {save_path}")
     plt.close()
     
+
+
+def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, num_samples=7):
+    """
+    Plot reconstruction vs ground truth for multiple variables/channels.
+    For each variable, generate a 7x3 grid: Ground Truth, Prediction, Error.
+    Supports model-based and cubic interpolation.
+    """
+    model_is_interp = model_name == "cubic_interpolation"
+    model_is_kriging = model_name == "kriging"
+    
+
+    if not model_is_interp and not model_is_kriging:
+        model.eval()
+
+    dataset = val_loader.dataset
+    total_samples = len(dataset)
+    input_sample, target_sample = dataset[0]
+    num_channels = target_sample.shape[0]
+
+    with torch.no_grad():
+        for ch in range(num_channels):
+            fig, axs = plt.subplots(num_samples, 3, figsize=(12, 2.2 * num_samples))
+            fig.suptitle(f"Channel {ch}: Variable {ch}", fontsize=14)
+
+            for i in range(num_samples):
+                idx = random.randint(0, total_samples - 1)
+                x, y = dataset[idx]
+                gt = y[ch].cpu().numpy()
+
+                if model_is_interp:
+                    # x: (num_channels+1, H, W) -- [0]=mask, [1:]=Voronoi values
+                    x_np = x.cpu().numpy()
+                    mask = x_np[0]
+                    tess = x_np[1 + ch]  # variable-specific Voronoi values
+                    H, W = mask.shape
+                    yx = np.argwhere(mask > 0)
+                    values = tess[mask > 0]
+                    grid_y, grid_x = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
+                    interp = griddata(yx, values, (grid_y, grid_x), method='cubic', fill_value=0.0)
+                    pred = interp
+                    
+                elif model_is_kriging:
+                    
+                    x_np = x.cpu().numpy()
+                    mask = x_np[0]
+                    tess = x_np[1 + ch]  # variable-specific Voronoi values
+                    H, W = mask.shape
+                    yx = np.argwhere(mask > 0)
+                    values = tess[mask > 0]
+                    grid_y, grid_x = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
+                    interp = kriging_interpolation(yx, values, H, W, model='linear')
+                    pred = interp
+                    
+                else:
+                    x_in = x.unsqueeze(0).to(device)
+                    if model_name == "vae":
+                        recon_x, mu, logvar = model(x_in)
+                        pred = recon_x.squeeze().cpu().numpy()[ch]
+                    else:
+                        pred = model(x_in).squeeze().cpu().numpy()[ch]
+
+                error = np.abs(gt - pred)
+
+                axs[i, 0].imshow(gt, cmap='viridis')
+                axs[i, 0].set_title(f"Image {i} — Ground Truth")
+                axs[i, 0].axis("off")
+
+                axs[i, 1].imshow(pred, cmap='viridis')
+                axs[i, 1].set_title("Reconstruction" if not model_is_interp else "Cubic Interpolation")
+                axs[i, 1].axis("off")
+
+                axs[i, 2].imshow(error, cmap='hot')
+                axs[i, 2].set_title("Abs Error")
+                axs[i, 2].axis("off")
+
+            plt.tight_layout(rect=[0, 0, 1, 0.98])
+            fname = os.path.join(save_dir, f"{model_name}_reco_channel_{ch}.png")
+            plt.savefig(fname, dpi=200)
+            plt.close()
+            print(f"📸 Saved plot for channel {ch} to {fname}")

@@ -7,7 +7,7 @@ import random
 import numpy as np
 from utils import get_device, create_model
 import matplotlib.pyplot as plt
-from plots_creator import plot_voronoi_reconstruction_comparison
+from plots_creator import plot_voronoi_reconstruction_comparison, plot_random_reconstruction
 
 
 def get_optimizer(model, config):
@@ -76,54 +76,7 @@ def get_loss_function(config):
         raise ValueError(f"Unknown loss function type: {loss}")
 
 
-def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, num_samples=7):
-    """
-    Plot reconstruction vs ground truth for multiple variables/channels.
-    For each variable, generate a 7x3 grid: Ground Truth, Prediction, Error.
-    """
-    model.eval()
-    dataset = val_loader.dataset
-    total_samples = len(dataset)
-    input_sample, target_sample = dataset[0]
-    num_channels = target_sample.shape[0]
 
-    with torch.no_grad():
-        for ch in range(num_channels):
-            fig, axs = plt.subplots(num_samples, 3, figsize=(12, 2.2 * num_samples))
-            fig.suptitle(f"Channel {ch}: Variable {ch}", fontsize=14)
-
-            for i in range(num_samples):
-                idx = random.randint(0, total_samples - 1)
-                x, y = dataset[idx]
-                x = x.unsqueeze(0).to(device)
-                y = y[ch]  # shape (H, W)
-
-                if model_name == "vae":
-                    recon_x, mu, logvar = model(x)
-                    pred = recon_x.squeeze().cpu().numpy()[ch]
-                else:
-                    pred = model(x).squeeze().cpu().numpy()[ch]
-
-                gt = y.cpu().numpy()
-                error = np.abs(gt - pred)
-
-                axs[i, 0].imshow(gt, cmap='viridis')
-                axs[i, 0].set_title(f"Image {i} — Ground Truth")
-                axs[i, 0].axis("off")
-
-                axs[i, 1].imshow(pred, cmap='viridis')
-                axs[i, 1].set_title("Reconstruction")
-                axs[i, 1].axis("off")
-
-                axs[i, 2].imshow(error, cmap='hot')
-                axs[i, 2].set_title("Abs Error")
-                axs[i, 2].axis("off")
-
-            plt.tight_layout(rect=[0, 0, 1, 0.98])
-            fname = os.path.join(save_dir, f"{model_name}_reco_channel_{ch}.png")
-            plt.savefig(fname, dpi=200)
-            plt.close()
-            print(f"📸 Saved plot for channel {ch} to {fname}")   
                  
 def train(model_name, data, model_save_path, config):
     """

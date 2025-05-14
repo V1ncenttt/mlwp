@@ -79,3 +79,4 @@ def create_model(model, nb_channels=2):
         return ReconstructionVAE(in_channels=nb_channels, out_channels=nb_channels-1, latent_dim=128)
     else:
         raise ValueError(f"Unknown model type: {model}")
+
