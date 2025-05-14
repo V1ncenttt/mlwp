@@ -2,7 +2,7 @@ import numpy as np
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
 import torch
-from models import FukamiNet, FukamiResNet, FukamiUNet, ReconstructionVAE
+from models import FukamiNet, FukamiResNet, FukamiUNet, ReconstructionVAE, vitae_lite, vitae_large, vitae_base
 import numpy as np
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
@@ -73,8 +73,12 @@ def create_model(model, nb_channels=2):
         return FukamiResNet(in_channels=nb_channels, out_channels=nb_channels-1)
     elif model == "fukami_unet":
         return FukamiUNet(in_channels=nb_channels, out_channels=nb_channels-1)
-    elif model == "vitae_sl":
-        return None
+    elif model == "vitae_lite":
+        return vitae_lite(in_channels=nb_channels, out_channels=nb_channels-1)
+    elif model == "vitae_large":
+        return vitae_large(in_channels=nb_channels, out_channels=nb_channels-1)
+    elif model == "vitae_base":
+        return vitae_base(in_channels=nb_channels, out_channels=nb_channels-1)
     elif model == "vae":
         return ReconstructionVAE(in_channels=nb_channels, out_channels=nb_channels-1, latent_dim=128)
     else:

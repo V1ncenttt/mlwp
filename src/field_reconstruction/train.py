@@ -21,6 +21,8 @@ def get_optimizer(model, config):
     Returns:
         optimizer: Optimizer instance.
     """
+    
+    assert optimizer in ["adam", "adamw", "sgd"], f"Unknown optimizer type: {optimizer}"
     optimizer = config["optimizer"]
     lr = config["learning_rate"]
     weight_decay = config["weight_decay"]
@@ -53,6 +55,28 @@ def beta_vae_loss_function(recon_x, x, mu, logvar, beta=0):
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     return recon_loss + beta * KLD
 
+def vitae_sl_loss_function(x, dex_x, enc_x, lambda_1=0.8, lambda_2=0.2):
+    """Computes the VITAE-SL loss function, weighted sums of MSE for the decoder output Pd and encoder output Pe.
+    L= lambda_1 * Ld + lambda_2 * Le
+    where Ld is the MSE loss between the decoder output and the input, and Le is the MSE loss between the encoder output and the input.
+    The lambda_1 and lambda_2 parameters control the relative importance of the two losses.
+    The loss function is used to train the VITAE-SL model.
+    The model is trained to minimize the difference between the input and the reconstructed output, while also ensuring that the encoder output is similar to the input.
+    The lambda_1 and lambda_2 parameters can be adjusted to control the trade-off between the two losses.
+
+    Args:
+        x (_type_): _
+        dex_x (_type_): decoder output tensor
+        enc_x (_type_): encoder output tensor
+        lambda_1 (float, optional): _description_. 
+        lambda_2 (float, optional): _description_.
+    """
+    
+    recon_loss = nn.functional.mse_loss(dex_x, x, reduction='mean')
+    enc_loss = nn.functional.mse_loss(enc_x, x, reduction='mean')
+    return lambda_1 * recon_loss + lambda_2 * enc_loss
+
+
 def get_loss_function(config):
     """
     Get the loss function based on the configuration.
@@ -64,6 +88,9 @@ def get_loss_function(config):
         criterion: Loss function instance.
     """
     loss = config["loss"]
+    
+    assert loss in ["mse", "mae", "smoothl1", "vae_elbo", "vitae_sl"], f"Unknown loss function type: {loss}"
+    
     if loss == "mse":
         return nn.MSELoss()
     elif loss == "mae":
@@ -72,6 +99,8 @@ def get_loss_function(config):
         return nn.SmoothL1Loss()
     elif loss == "vae_elbo":
         return beta_vae_loss_function
+    elif loss == "vitae_sl":
+        return vitae_sl_loss_function
     else:
         raise ValueError(f"Unknown loss function type: {loss}")
 

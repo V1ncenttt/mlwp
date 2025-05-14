@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 
 from functools import partial
-from pos_embed import get_2d_sincos_pos_embed
-from timm.models.vision_transformer import PatchEmbed, Block
+from models.pos_embed import get_2d_sincos_pos_embed
+#from timm.models.vision_transformer import PatchEmbed, Block
 
 # --------------------------------------------------------
 # Vitae-SL

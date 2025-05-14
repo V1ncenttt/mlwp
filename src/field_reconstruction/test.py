@@ -20,8 +20,8 @@ def kriging_interpolation(yx, values, H, W, model='linear'):
     y = yx[:, 0].astype(np.float64)
     z = values.astype(np.float64)
 
-    gridx = np.linspace(0, W - 1, W)
-    gridy = np.linspace(0, H - 1, H)
+    gridx = np.arange(W, dtype=float)
+    gridy = np.arange(H, dtype=float)
 
     try:
         ok = OrdinaryKriging(x, y, z, variogram_model=model, verbose=False)
@@ -237,6 +237,9 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
             if model_type == "vae":
                 recon_x, mu, logvar = model(inputs)
                 preds = recon_x
+            elif "vitae" in model_type:
+                pred_dec, pred_enc = model(inputs)
+                preds = pred_dec
             else:
                 preds = model(inputs)
 
