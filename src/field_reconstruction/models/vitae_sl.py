@@ -66,7 +66,7 @@ class ViTAutoEncoder(nn.Module):
             for i in range(enc_depth)
         ])
         self.norm = enc_norm_layer(enc_dim)
-        self.encoder_out = nn.Conv2d(enc_chans, in_chans, 1, padding=0)
+        self.encoder_out = nn.Conv2d(enc_chans, in_chans-1, 1, padding=0)
 
         # CNN decoder specifics
         self.decoder_embed = nn.Linear(enc_dim, patch_size ** 2 * enc_chans, bias=True)
@@ -76,7 +76,7 @@ class ViTAutoEncoder(nn.Module):
             for i in range(len(dec_dims) - 1)
         ]
         self.decoder_cnn = nn.Sequential(*decoder_cnn_blocks)
-        self.decoder_out = nn.Conv2d(dec_dims[-1], in_chans, 1, padding=0)
+        self.decoder_out = nn.Conv2d(dec_dims[-1], in_chans-1, 1, padding=0)
 
         self.initialize_weights()
 
