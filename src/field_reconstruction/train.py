@@ -204,6 +204,6 @@ def train(model_name, data, model_save_path, config):
     with open(os.path.join(model_save_path, f"last_loss_{epochs}.txt"), "w") as f:
         f.write(f"Last validation loss: {val_loss:.6f}")
     
-    plot_random_reconstruction(model, val_loader, device, model_name, model_save_path)
+    #plot_random_reconstruction(model, val_loader, device, model_name, model_save_path)
 
     return model

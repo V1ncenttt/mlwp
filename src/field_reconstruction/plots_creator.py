@@ -246,6 +246,9 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, 
                     if model_name == "vae":
                         recon_x, mu, logvar = model(x_in)
                         pred = recon_x.squeeze().cpu().numpy()[ch]
+                    elif "vitae" in model_name:
+                        dex_x, enc_x = model(x_in)
+                        pred = dex_x.squeeze().cpu().numpy()[ch]
                     else:
                         pred = model(x_in).squeeze().cpu().numpy()[ch]
 

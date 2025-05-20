@@ -297,8 +297,18 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
     # 📊 Plot L2 Error Distributions
     save_dir = Path("plots/evaluation")
     save_dir.mkdir(parents=True, exist_ok=True)
+    
     plot_l2_error_distributions(l2_errors_dict, variable_names, model_type, str(save_dir),)
-
+    
+    plot_random_reconstruction(
+        model=model,
+        val_loader=test_loader,
+        device=device,
+        model_name=model_type,
+        save_dir=str(save_dir),
+        num_samples
+        =7
+    )
     return {
         "rrmse": np.mean(rrmse_total),
         "mae": np.mean(mae_total),

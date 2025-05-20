@@ -27,7 +27,7 @@ logging:
   use_wandb: true
 
 split_ratio: 0.8
-model: vitae_lite
+model: vitae_base
 percent: 10
 batch_size: 32
 variables: 5vars_2d
@@ -40,8 +40,8 @@ tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
 test:
   test_dataset: 
-  model_path: vitae_lite_model_25_0.121608.pth
-  model_type: vitae_lite
+  model_path: vitae_base_model_25_0.093341.pth
+  model_type: vitae_base
 
 wandb:
   project: mlwp-thesis-fieldreco
