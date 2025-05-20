@@ -22,11 +22,14 @@ def get_optimizer(model, config):
         optimizer: Optimizer instance.
     """
     
-    assert optimizer in ["adam", "adamw", "sgd"], f"Unknown optimizer type: {optimizer}"
     optimizer = config["optimizer"]
     lr = config["learning_rate"]
     weight_decay = config["weight_decay"]
     
+    assert optimizer in ["adam", "adamw", "sgd"], f"Unknown optimizer type: {optimizer}"
+    assert lr > 0, f"Learning rate must be positive: {lr}"
+    assert weight_decay >= 0, f"Weight decay must be non-negative: {weight_decay}"
+   
     if optimizer == "adam":
         return optim.Adam(model.parameters(), lr=lr)
     if optimizer == "adamw":
@@ -144,6 +147,8 @@ def train(model_name, data, model_save_path, config):
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs} [Training]", leave=False)
         for inputs, targets in pbar:
+            print(f"Inputs shape: {inputs.shape}")
+            print(f"Targets shape: {targets.shape}")
             inputs, targets = inputs.to(device), targets.to(device)
 
             optimizer.zero_grad()
@@ -151,6 +156,9 @@ def train(model_name, data, model_save_path, config):
             if model_name == "vae" and config["loss"] == "vae_elbo":
                 recon_x, mu, logvar = model(inputs)
                 loss = criterion(recon_x, targets, mu, logvar)
+            elif "vitae" in model_name and config["loss"] == "vitae_sl":
+                dex_x, enc_x = model(inputs)
+                loss = criterion(targets, dex_x, enc_x)
             else:
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
@@ -172,6 +180,11 @@ def train(model_name, data, model_save_path, config):
                 if model_name == "vae" and config["loss"] == "vae_elbo":
                     recon_x, mu, logvar = model(inputs)
                     loss = criterion(recon_x, targets, mu, logvar)
+                elif "vitae" in model_name and config["loss"] == "vitae_sl":
+                    dex_x, enc_x = model(inputs)
+                    print(f"Decoder output shape: {dex_x.shape}")
+                    print(f"Encoder output shape: {enc_x.shape}")
+                    loss = criterion(targets, dex_x, enc_x)
                 else:
                     outputs = model(inputs)
                     loss = criterion(outputs, targets)

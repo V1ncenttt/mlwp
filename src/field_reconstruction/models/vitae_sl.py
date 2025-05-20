@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from functools import partial
 from models.pos_embed import get_2d_sincos_pos_embed
-#from timm.models.vision_transformer import PatchEmbed, Block
+from timm.models.vision_transformer import PatchEmbed, Block
 
 # --------------------------------------------------------
 # Vitae-SL
@@ -59,14 +59,14 @@ class ViTAutoEncoder(nn.Module):
         self.blocks = nn.ModuleList([
             Block(
                 enc_dim, enc_num_heads, enc_mlp_ratio,
-                qkv_bias=True, qk_scale=None,
-                drop=0.0, attn_drop=0.0, drop_path=0.0,
+                qkv_bias=True,
+                proj_drop=0.0, attn_drop=0.0, 
                 norm_layer=enc_norm_layer
             )
             for i in range(enc_depth)
         ])
         self.norm = enc_norm_layer(enc_dim)
-        self.encoder_out = nn.Conv2d(enc_chans, 1, 1, padding=0)
+        self.encoder_out = nn.Conv2d(enc_chans, in_chans, 1, padding=0)
 
         # CNN decoder specifics
         self.decoder_embed = nn.Linear(enc_dim, patch_size ** 2 * enc_chans, bias=True)
@@ -76,7 +76,7 @@ class ViTAutoEncoder(nn.Module):
             for i in range(len(dec_dims) - 1)
         ]
         self.decoder_cnn = nn.Sequential(*decoder_cnn_blocks)
-        self.decoder_out = nn.Conv2d(dec_dims[-1], 1, 1, padding=0)
+        self.decoder_out = nn.Conv2d(dec_dims[-1], in_chans, 1, padding=0)
 
         self.initialize_weights()
 

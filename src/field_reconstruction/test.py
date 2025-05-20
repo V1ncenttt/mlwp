@@ -15,7 +15,7 @@ from pykrige.ok import OrdinaryKriging
 
 from pathlib import Path  # <-- make sure this is imported
 
-def kriging_interpolation(yx, values, H, W, model='linear'):
+def kriging_interpolation(yx, values, H, W, model='exponential'):
     x = yx[:, 1].astype(np.float64)
     y = yx[:, 0].astype(np.float64)
     z = values.astype(np.float64)
@@ -24,7 +24,7 @@ def kriging_interpolation(yx, values, H, W, model='linear'):
     gridy = np.arange(H, dtype=float)
 
     try:
-        ok = OrdinaryKriging(x, y, z, variogram_model=model, verbose=False)
+        ok = OrdinaryKriging(x, y, z, variogram_model=model, verbose=False, enable_plotting=False)
         interp, _ = ok.execute('grid', gridx, gridy)
     except Exception as e:
         print(f"Kriging failed: {e}")

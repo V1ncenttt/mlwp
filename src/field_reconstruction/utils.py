@@ -67,6 +67,7 @@ def get_device():
     return 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def create_model(model, nb_channels=2):
+    input_size = (64, 32)
     if model == "fukami":
         return FukamiNet(in_channels=nb_channels, out_channels=nb_channels-1)
     elif model == "fukami_resnet":
@@ -74,11 +75,11 @@ def create_model(model, nb_channels=2):
     elif model == "fukami_unet":
         return FukamiUNet(in_channels=nb_channels, out_channels=nb_channels-1)
     elif model == "vitae_lite":
-        return vitae_lite(in_channels=nb_channels, out_channels=nb_channels-1)
+        return vitae_lite(input_size=input_size, in_chans=nb_channels, patch_size=4)
     elif model == "vitae_large":
-        return vitae_large(in_channels=nb_channels, out_channels=nb_channels-1)
+        return vitae_large(input_size=input_size, in_chans=nb_channels, patch_size=4)
     elif model == "vitae_base":
-        return vitae_base(in_channels=nb_channels, out_channels=nb_channels-1)
+        return vitae_base(input_size=input_size, in_chans=nb_channels, patch_size=4)
     elif model == "vae":
         return ReconstructionVAE(in_channels=nb_channels, out_channels=nb_channels-1, latent_dim=128)
     else:

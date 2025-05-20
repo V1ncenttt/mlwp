@@ -32,7 +32,7 @@ def get_dataset_mode(model_name):
     """
     if model_name in ["fukami", "vae", "fukami_resnet", "fukami_unet"]:
         return "voronoi"
-    elif model_name == "vitae_sl":
+    elif "vitae" in model_name:
         return "vitae"
     else:
         raise ValueError(f"Unknown model name: {model_name}")

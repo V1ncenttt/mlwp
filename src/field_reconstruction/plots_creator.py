@@ -6,7 +6,7 @@ import random
 from scipy.interpolate import griddata
 from pykrige.ok import OrdinaryKriging
 
-def kriging_interpolation(yx, values, H, W, model='linear'):
+def kriging_interpolation(yx, values, H, W, model='exponential'):
     x = yx[:, 1].astype(np.float64)
     y = yx[:, 0].astype(np.float64)
     z = values.astype(np.float64)
@@ -238,7 +238,7 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, 
                     yx = np.argwhere(mask > 0)
                     values = tess[mask > 0]
                     grid_y, grid_x = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
-                    interp = kriging_interpolation(yx, values, H, W, model='linear')
+                    interp = kriging_interpolation(yx, values, H, W, model='exponential')
                     pred = interp
                     
                 else:

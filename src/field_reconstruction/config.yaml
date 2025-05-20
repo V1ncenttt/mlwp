@@ -19,7 +19,7 @@ data:
   variables: [t2m, u10, v10]
 
 
-loss: mse # Select from mse, mae, vae_elbo, smooth_l1, etc.
+loss: vitae_sl # Select from mse, mae, vae_elbo, smooth_l1, etc.
 
 logging:
   log_every: 10
@@ -27,7 +27,7 @@ logging:
   use_wandb: true
 
 split_ratio: 0.8
-model: fukami
+model: vitae_lite
 percent: 10
 batch_size: 32
 variables: 5vars_2d
