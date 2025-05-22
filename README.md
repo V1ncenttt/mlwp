@@ -13,15 +13,18 @@ This repository contains the codebase and experiments for my MSc thesis at Imper
 ---
 
 ## 🧠 Model Types
+### Field Reconstruction
 
 - **Deterministic Models**
   - ResNet-based CNNs
-  - Vision Transformers (e.g., ViT, Senseiver-style)
-  - LSTM (DSOVT-style)
+  - U-net
+  - Vision Transformers (e.g., ViT (VITAE-SL))
+  - Simple CNNS (Voronoi-CNN)
 
 - **Probabilistic Models**
   - Score-based diffusion models (e.g., SDD, SGD)
   - Spatial-aware diffusion with Voronoi encoding
+  - CWGAN (Conditional Wasserstein GANs)
 
 ---
 
@@ -36,12 +39,9 @@ This repository contains the codebase and experiments for my MSc thesis at Imper
 ## 🧱 Structure
 ```bash
 .
-├── models/              # Model definitions (CNN, ViT, Diffusion, etc.)
 ├── data/                # WeatherBench2 loading and preprocessing
-├── scripts/             # Training and evaluation scripts
-├── configs/             # YAML config files
-├── notebooks/           # Exploratory analysis and results
-└── results/             # Logs, metrics, figures
+├── plots/            
+└── src/             
 ```
 
 ---
