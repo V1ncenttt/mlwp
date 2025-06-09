@@ -82,6 +82,9 @@ def create_model(model, nb_channels=2):
         return vitae_base(input_size=input_size, in_chans=nb_channels, patch_size=4)
     elif model == "vae":
         return ReconstructionVAE(in_channels=nb_channels, out_channels=nb_channels-1, latent_dim=128)
+    elif model == "cwgan_gp":
+        from models.cwgan import Generator, Discriminator
+        return Generator(in_channels=nb_channels, out_channels=nb_channels-1), Discriminator(in_channels=nb_channels)
     else:
         raise ValueError(f"Unknown model type: {model}")
 

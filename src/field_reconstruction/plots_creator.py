@@ -173,6 +173,7 @@ def plot_l2_error_distributions(l2_errors_dict, variable_names, model_name, save
         ax.set_title(var, fontsize=12)
         ax.set_xlabel("Relative L2 Error")
         ax.set_ylabel("Frequency")
+        ax.legend(['Mean', 'Median'], loc='upper right')
 
     # Remove unused subplots if any
     for j in range(len(variable_names), len(axs)):
@@ -197,6 +198,7 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, 
     """
     model_is_interp = model_name == "cubic_interpolation"
     model_is_kriging = model_name == "kriging"
+    channel_names =["Temperature (10m)", "U component of Wind (10m)", "V component of Wind (10m)", "Water column vapour", "Sea level pressure"]
     
 
     if not model_is_interp and not model_is_kriging:
@@ -209,8 +211,8 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, 
 
     with torch.no_grad():
         for ch in range(num_channels):
-            fig, axs = plt.subplots(num_samples, 3, figsize=(12, 2.2 * num_samples))
-            fig.suptitle(f"Channel {ch}: Variable {ch}", fontsize=14)
+            fig, axs = plt.subplots(3, num_samples, figsize=(2.5 * num_samples, 6))
+            fig.suptitle(f"{channel_names[ch]}", fontsize=14)
 
             for i in range(num_samples):
                 idx = random.randint(0, total_samples - 1)
@@ -254,17 +256,20 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, 
 
                 error = np.abs(gt - pred)
 
-                axs[i, 0].imshow(gt, cmap='viridis')
-                axs[i, 0].set_title(f"Image {i} — Ground Truth")
-                axs[i, 0].axis("off")
+                im0 = axs[0, i].imshow(np.rot90(gt, k=-1), cmap='viridis')
+                axs[0, i].set_title(f"Image {i}\nGround Truth", fontsize=8)
+                axs[0, i].axis("off")
+                fig.colorbar(im0, ax=axs[0, i], shrink=0.7, pad=0.03)
 
-                axs[i, 1].imshow(pred, cmap='viridis')
-                axs[i, 1].set_title("Reconstruction" if not model_is_interp else "Cubic Interpolation")
-                axs[i, 1].axis("off")
+                im1 = axs[1, i].imshow(np.rot90(pred, k=-1), cmap='viridis')
+                axs[1, i].set_title("Reconstruction", fontsize=8)
+                axs[1, i].axis("off")
+                fig.colorbar(im1, ax=axs[1, i], shrink=0.7, pad=0.03)
 
-                axs[i, 2].imshow(error, cmap='hot')
-                axs[i, 2].set_title("Abs Error")
-                axs[i, 2].axis("off")
+                im2 = axs[2, i].imshow(np.rot90(error, k=-1), cmap='hot')
+                axs[2, i].set_title("Abs Error", fontsize=8)
+                axs[2, i].axis("off")
+                fig.colorbar(im2, ax=axs[2, i], shrink=0.7, pad=0.03)
 
             plt.tight_layout(rect=[0, 0, 1, 0.98])
             fname = os.path.join(save_dir, f"{model_name}_reco_channel_{ch}.png")
