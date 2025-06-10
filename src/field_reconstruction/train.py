@@ -8,7 +8,7 @@ import numpy as np
 from utils import get_device, create_model
 import matplotlib.pyplot as plt
 from plots_creator import plot_voronoi_reconstruction_comparison, plot_random_reconstruction
-
+from loss_functions import cwgan_discriminator_loss, cwgan_generator_loss
 
 def get_optimizer(model, config):
     """
@@ -104,6 +104,8 @@ def get_loss_function(config):
         return beta_vae_loss_function
     elif loss == "vitae_sl":
         return vitae_sl_loss_function
+    elif "cwgan_gp" in loss:
+        return None
     else:
         raise ValueError(f"Unknown loss function type: {loss}")
 
@@ -120,6 +122,9 @@ def train(model_name, data, model_save_path, config):
         model_save_path: Path to save the trained model.
         config: Configuration parameters (dict).
     """
+    
+
+
     device = get_device()
     
     train_loader = data["train_loader"]
@@ -128,7 +133,17 @@ def train(model_name, data, model_save_path, config):
     sample_input, _ = next(iter(train_loader))
     nb_channels = sample_input.shape[1]
     
-    model = create_model(model_name, nb_channels=nb_channels).to(device)
+    model = create_model(model_name, nb_channels=nb_channels)
+    
+    if "cwgan" in model_name.lower():
+        print("⚠️  Detected CWGAN model — using train_cwgan() instead of train()")
+        generator, discriminator = model
+        generator = generator.to(device)
+        discriminator = discriminator.to(device)
+        train_cwgan(generator, discriminator, data, model_save_path, config)
+        return  # Exit normal train() after calling train_cwgan
+    
+    model = model.to(device)
     criterion = get_loss_function(config)
     optimizer = get_optimizer(model, config)
     epochs = config["epochs"]
@@ -207,3 +222,80 @@ def train(model_name, data, model_save_path, config):
     #plot_random_reconstruction(model, val_loader, device, model_name, model_save_path)
 
     return model
+
+def train_cwgan(generator, discriminator, data, model_save_path, config):
+    device = get_device()
+    train_loader = data["train_loader"]
+    val_loader = data["val_loader"]
+
+    lambda_gp = config.get("lambda_gp", 10.0)
+    lambda_l1 = config.get("lambda_l1", 100.0)
+    epochs = config["epochs"]
+    critic_iter = config.get("critic_iter", 5)
+
+    generator.to(device)
+    discriminator.to(device)
+
+    optimizer_G = get_optimizer(generator, config)
+    optimizer_D = get_optimizer(discriminator, config)
+
+    if not os.path.exists(model_save_path):
+        os.makedirs(model_save_path)
+        print(f"📁 Created directory: {model_save_path}")
+
+    print(f"📊 Number of training samples: {len(train_loader.dataset)}")
+    print(f"📊 Number of validation samples: {len(val_loader.dataset)}")
+    print("📦 Training started...")
+
+    for epoch in range(1, epochs + 1):
+        generator.train()
+        discriminator.train()
+        g_loss_total, d_loss_total = 0.0, 0.0
+
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs} [Training]", leave=False)
+        for i, (inputs, targets) in enumerate(pbar):
+            inputs, targets = inputs.to(device), targets.to(device)
+
+            # === Train Discriminator ===
+            for _ in range(critic_iter):
+                z_fake = generator(inputs).detach()
+                real_pred = discriminator(targets, inputs)
+                fake_pred = discriminator(z_fake, inputs)
+
+                alpha = torch.rand(targets.size(0), 1, 1, 1).to(device)
+                interpolates = (alpha * targets + (1 - alpha) * z_fake).requires_grad_(True)
+                d_interpolates = discriminator(interpolates, inputs)
+
+                gradients = torch.autograd.grad(
+                    outputs=d_interpolates,
+                    inputs=interpolates,
+                    grad_outputs=torch.ones_like(d_interpolates),
+                    create_graph=True,
+                    retain_graph=True,
+                    only_inputs=True
+                )[0]
+
+                d_loss = cwgan_discriminator_loss(real_pred, fake_pred, gradients, lambda_gp)
+                optimizer_D.zero_grad()
+                d_loss.backward()
+                optimizer_D.step()
+
+            # === Train Generator ===
+            z_fake = generator(inputs)
+            fake_pred = discriminator(z_fake, inputs)
+            g_loss = cwgan_generator_loss(fake_pred, z_fake, targets, lambda_l1)
+            optimizer_G.zero_grad()
+            g_loss.backward()
+            optimizer_G.step()
+
+            g_loss_total += g_loss.item()
+            d_loss_total += d_loss.item()
+            pbar.set_postfix({"G Loss": g_loss.item(), "D Loss": d_loss.item()})
+
+        g_loss_total /= len(train_loader)
+        d_loss_total /= len(train_loader)
+        print(f"📉 Epoch {epoch}/{epochs} — G Loss: {g_loss_total:.6f} | D Loss: {d_loss_total:.6f}")
+
+    torch.save(generator.state_dict(), os.path.join(model_save_path, f"generator_model_{epochs}_{g_loss_total:.6f}.pth"))
+    torch.save(discriminator.state_dict(), os.path.join(model_save_path, f"discriminator_model_{epochs}_{d_loss_total:.6f}.pth"))
+    print(f"💾 Generator and Discriminator saved to {model_save_path}")
