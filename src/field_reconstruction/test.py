@@ -1,5 +1,3 @@
-
-
 import torch
 import os
 import numpy as np
@@ -205,7 +203,7 @@ def evaluate_interp(test_loader, mode: str = 'cubic', nb_channels: int = 2, vari
 def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
     
     device = get_device()
-    sample_input, _ = next(iter(test_loader))
+    
     nb_channels = sample_input.shape[1]
 
     if model_type == "cubic_interpolation":
@@ -318,3 +316,14 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
         "ssim_per_var": ssim_total,
         "l2_per_var": l2_errors,
     }
+
+def check_normalization(tensor, name="Tensor"):
+    """
+    Print min, max, mean, std to check normalization.
+    """
+    tensor_np = tensor.cpu().numpy()
+    print(f"\n{name} stats:")
+    print(f"  Min:  {tensor_np.min():.4f}")
+    print(f"  Max:  {tensor_np.max():.4f}")
+    print(f"  Mean: {tensor_np.mean():.4f}")
+    print(f"  Std:  {tensor_np.std():.4f}")

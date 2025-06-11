@@ -33,6 +33,6 @@ def cwgan_generator_loss(fake_pred, recon_x, real_x, lambda_l1):
         Tensor: Generator loss.
     """
     adv_loss = -torch.mean(fake_pred)
-    recon_loss = F.l1_loss(recon_x, real_x)
+    recon_loss = F.l1_loss(recon_x, real_x, reduction="mean")
     g_loss = adv_loss + lambda_l1 * recon_loss
     return g_loss

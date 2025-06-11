@@ -8,7 +8,7 @@ class Generator(nn.Module):
     Adapted for 64x32 input to support 6 encoder steps.
     """
     
-    def __init__(self, in_channels=2, out_channels=1, *args, **kwargs):
+    def __init__(self, in_channels=5, out_channels=5, *args, **kwargs):
         super(Generator, self).__init__(*args, **kwargs)
         # Encoder blocks
         self.encoder1 = nn.Sequential(
@@ -32,7 +32,7 @@ class Generator(nn.Module):
             nn.LeakyReLU(0.2)
         )
         self.encoder5 = nn.Sequential(
-            nn.Conv2d(512, 512, kernel_size=4, stride=2, padding=(0,0)),  # 4x2 -> 1x1
+            nn.Conv2d(512, 512, kernel_size=(4,2), stride=1, padding=0),  # 4x2 -> 1x1
             nn.BatchNorm2d(512),
             nn.LeakyReLU(0.2)
         )
@@ -49,7 +49,7 @@ class Generator(nn.Module):
             nn.ReLU()
         )
         self.decoder2 = nn.Sequential(
-            nn.ConvTranspose2d(1024, 512, kernel_size=4, stride=2, padding=(0,0)),  # 1x1 -> 4x2
+            nn.ConvTranspose2d(1024, 512, kernel_size=(4,2), stride=1, padding=0),  # 1x1 -> 4x2
             nn.BatchNorm2d(512),
             nn.ReLU()
         )
@@ -59,21 +59,21 @@ class Generator(nn.Module):
             nn.ReLU()
         )
         self.decoder4 = nn.Sequential(
-            nn.ConvTranspose2d(1024, 256, kernel_size=4, stride=2, padding=1),  # 8x4 -> 16x8
+            nn.ConvTranspose2d(768, 256, kernel_size=4, stride=2, padding=1),  # 8x4 -> 16x8
             nn.BatchNorm2d(256),
             nn.ReLU()
         )
         self.decoder5 = nn.Sequential(
-            nn.ConvTranspose2d(512, 128, kernel_size=4, stride=2, padding=1),  # 16x8 -> 32x16
+            nn.ConvTranspose2d(384, 128, kernel_size=4, stride=2, padding=1),  # 16x8 -> 32x16
             nn.BatchNorm2d(128),
             nn.ReLU()
         )
         self.decoder6 = nn.Sequential(
-            nn.ConvTranspose2d(256, 64, kernel_size=4, stride=2, padding=1),  # 32x16 -> 64x32
+            nn.ConvTranspose2d(192, 64, kernel_size=4, stride=2, padding=1),  # 32x16 -> 64x32
             nn.BatchNorm2d(64),
             nn.ReLU()
         )
-        self.final = nn.ConvTranspose2d(128, out_channels, kernel_size=3, stride=1, padding=1)  # 64x32 -> 64x32
+        self.final = nn.ConvTranspose2d(69, out_channels, kernel_size=3, stride=1, padding=1)  # 64x32 -> 64x32
 
         initialize_weights_normal(self)
 
@@ -98,13 +98,13 @@ class Generator(nn.Module):
     
 
 class Discriminator(nn.Module):
-    def __init__(self, in_channels=2, *args, **kwargs):
+    def __init__(self, in_channels=5, *args, **kwargs):
         super(Discriminator, self).__init__(*args, **kwargs)
         self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1)
         self.conv2 = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1)
         self.conv3 = nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1)
         self.conv4 = nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1)
-        self.conv5 = nn.Conv2d(512, 1, kernel_size=4, stride=1, padding=0) #For 64x32 input
+        self.conv5 = nn.Conv2d(512, 1, kernel_size=(4,2), stride=1, padding=0) #For 64x32 input reduced to (4,2)
 
         initialize_weights_normal(self)
     
