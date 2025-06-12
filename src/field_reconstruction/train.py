@@ -8,7 +8,7 @@ import numpy as np
 from utils import get_device, create_model
 import matplotlib.pyplot as plt
 from plots_creator import plot_voronoi_reconstruction_comparison, plot_random_reconstruction
-from loss_functions import cwgan_discriminator_loss, cwgan_generator_loss
+from loss_functions import cwgan_discriminator_loss, cwgan_generator_loss, get_loss_function
 
 def get_optimizer(model, config):
     """
@@ -38,78 +38,6 @@ def get_optimizer(model, config):
         return optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     else:
         raise ValueError(f"Unknown optimizer type: {optimizer}")   
-
-def beta_vae_loss_function(recon_x, x, mu, logvar, beta=0):
-
-    """
-    Compute the beta-VAE loss.
-    
-    Args:
-        recon_x: Reconstructed input.
-        x: Original input.
-        mu: Mean from the encoder.
-        logvar: Log variance from the encoder.
-        beta: Weight for KL divergence term.
-    
-    Returns:
-        loss: Computed loss value.
-    """
-    recon_loss = nn.functional.mse_loss(recon_x, x, reduction='mean')
-    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    return recon_loss + beta * KLD
-
-def vitae_sl_loss_function(x, dex_x, enc_x, lambda_1=0.8, lambda_2=0.2):
-    """Computes the VITAE-SL loss function, weighted sums of MSE for the decoder output Pd and encoder output Pe.
-    L= lambda_1 * Ld + lambda_2 * Le
-    where Ld is the MSE loss between the decoder output and the input, and Le is the MSE loss between the encoder output and the input.
-    The lambda_1 and lambda_2 parameters control the relative importance of the two losses.
-    The loss function is used to train the VITAE-SL model.
-    The model is trained to minimize the difference between the input and the reconstructed output, while also ensuring that the encoder output is similar to the input.
-    The lambda_1 and lambda_2 parameters can be adjusted to control the trade-off between the two losses.
-
-    Args:
-        x (_type_): _
-        dex_x (_type_): decoder output tensor
-        enc_x (_type_): encoder output tensor
-        lambda_1 (float, optional): _description_. 
-        lambda_2 (float, optional): _description_.
-    """
-    
-    recon_loss = nn.functional.mse_loss(dex_x, x, reduction='mean')
-    enc_loss = nn.functional.mse_loss(enc_x, x, reduction='mean')
-    return lambda_1 * recon_loss + lambda_2 * enc_loss
-
-
-def get_loss_function(config):
-    """
-    Get the loss function based on the configuration.
-    
-    Args:
-        config: Configuration parameters.
-    
-    Returns:
-        criterion: Loss function instance.
-    """
-    loss = config["loss"]
-    
-    assert loss in ["mse", "mae", "smoothl1", "vae_elbo", "vitae_sl"], f"Unknown loss function type: {loss}"
-    
-    if loss == "mse":
-        return nn.MSELoss()
-    elif loss == "mae":
-        return nn.L1Loss()
-    elif loss == "smoothl1":
-        return nn.SmoothL1Loss()
-    elif loss == "vae_elbo":
-        return beta_vae_loss_function
-    elif loss == "vitae_sl":
-        return vitae_sl_loss_function
-    elif "cwgan_gp" in loss:
-        return None
-    else:
-        raise ValueError(f"Unknown loss function type: {loss}")
-
-
 
                  
 def train(model_name, data, model_save_path, config):
@@ -229,8 +157,8 @@ def train_cwgan(generator, discriminator, data, model_save_path, config):
     val_loader = data["val_loader"]
     #Print lr
     print(f"learning_rate: {config['learning_rate']}")
-    lambda_gp = config.get("lambda_gp", 1.0)
-    lambda_l1 = config.get("lambda_l1", 10.0)
+    lambda_gp = config.get("lambda_gp", 10)
+    lambda_l1 = config.get("lambda_l1", 100)
     epochs = config["epochs"]
     critic_iter = config.get("critic_iter", 5)
 
@@ -259,6 +187,9 @@ def train_cwgan(generator, discriminator, data, model_save_path, config):
     g_l1_loss_history = []
     g_adv_loss_history = []
 
+    g_loss_epoch_history = []
+    d_loss_epoch_history = []
+
     for epoch in range(1, epochs + 1):
         generator.train()
         discriminator.train()
@@ -282,12 +213,12 @@ def train_cwgan(generator, discriminator, data, model_save_path, config):
                 
                 alpha = torch.rand(targets.size(0), 1, 1, 1).to(device)
                 interpolates = (alpha * targets + (1 - alpha) * z_fake).requires_grad_(True)
-                interpolate_input = torch.cat([fields_only, interpolates], dim=1)
+                interpolate_input = torch.cat([fields_only, interpolates], dim=1).requires_grad_(True)
                 d_interpolates = discriminator(interpolate_input)
 
                 gradients = torch.autograd.grad(
                     outputs=d_interpolates,
-                    inputs=interpolates,
+                    inputs=interpolate_input,
                     grad_outputs=torch.ones_like(d_interpolates),
                     create_graph=True,
                     retain_graph=True,
@@ -299,9 +230,18 @@ def train_cwgan(generator, discriminator, data, model_save_path, config):
                 d_loss.backward()
                 optimizer_D.step()
 
+                # Weight clipping for discriminator (WGAN original trick)
+                """
+                clip_value = 0.01  # you can adjust this hyperparameter c
+                for p in discriminator.parameters():
+                    p.data.clamp_(-clip_value, clip_value)
+                """
+                
                 d_real_loss = -real_pred.mean().item()
                 d_fake_loss = fake_pred.mean().item()
                 grad_penalty = gradients.view(gradients.size(0), -1).norm(2, dim=1).sub(1).pow(2).mean().item()
+                grad_norm = gradients.view(gradients.size(0), -1).norm(2, dim=1).mean().item()
+                #print(f"Gradient Norm: {grad_norm:.6f}")
 
                 d_real_loss_history.append(d_real_loss)
                 d_fake_loss_history.append(d_fake_loss)
@@ -328,27 +268,77 @@ def train_cwgan(generator, discriminator, data, model_save_path, config):
 
         g_loss_total /= len(train_loader)
         d_loss_total /= len(train_loader)
+        g_loss_epoch_history.append(g_loss_total)
+        d_loss_epoch_history.append(d_loss_total)
         print(f"📉 Epoch {epoch}/{epochs} — G Loss: {g_loss_total:.6f} | D Loss: {d_loss_total:.6f}")
 
     torch.save(generator.state_dict(), os.path.join(model_save_path, f"generator_model_{epochs}_{g_loss_total:.6f}.pth"))
     torch.save(discriminator.state_dict(), os.path.join(model_save_path, f"discriminator_model_{epochs}_{d_loss_total:.6f}.pth"))
     print(f"💾 Generator and Discriminator saved to {model_save_path}")
 
-    # Plot loss components
+    # Plot overall G Loss and D Loss over epochs
     plt.figure(figsize=(10, 6))
-    plt.plot(d_real_loss_history, label='D Real Loss (-E[real_pred])')
-    plt.plot(d_fake_loss_history, label='D Fake Loss (E[fake_pred])')
-    plt.plot(grad_penalty_history, label='Gradient Penalty')
-    plt.plot(g_l1_loss_history, label='G L1 Loss')
-    plt.plot(g_adv_loss_history, label='G Adversarial Loss (-E[fake_pred])')
-    plt.xlabel('Training steps')
-    plt.ylabel('Loss Component Value')
+    plt.plot(g_loss_epoch_history, label='G Loss')
+    plt.plot(d_loss_epoch_history, label='D Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(os.path.join(model_save_path, 'loss_components_plot.png'))
-    print(f"📊 Loss components plot saved to {model_save_path}/loss_components_plot.png")
+    plt.savefig(os.path.join(model_save_path, 'loss_over_epochs.png'))
+    print(f"📊 Loss over epochs plot saved to {model_save_path}/loss_over_epochs.png")
 
+    show_random_cwgan_reconstruction(generator, val_loader, device, model_save_path)
+
+def show_random_cwgan_reconstruction(generator, val_loader, device, save_path):
+    """
+    Display and save one random reconstruction from the validation loader using the trained generator.
+
+    Args:
+        generator: Trained generator model.
+        val_loader: Validation data loader.
+        device: Computation device.
+        save_path: Path to save the reconstruction image.
+    """
+    generator.eval()
+    with torch.no_grad():
+        # Get one random batch from val_loader
+        inputs, targets = next(iter(val_loader))
+        inputs = inputs.to(device)
+        targets = targets.to(device)
+
+        # In VITAE mode, inputs[0] is mask, inputs[1:] are the 5 fields with 0 elsewhere
+        fields_only = inputs[:, 1:, :, :]
+
+        # Generate reconstruction
+        reconstruction = generator(fields_only)
+
+        # Move tensors to cpu and convert to numpy
+        inputs_np = inputs.cpu().numpy()
+        targets_np = targets.cpu().numpy()
+        reconstruction_np = reconstruction.cpu().numpy()
+
+        # Plot original target and reconstruction side by side for a random sample in batch
+        idx = random.randint(0, inputs_np.shape[0] - 1)
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+        vmax = max(targets_np[idx].max(), reconstruction_np[idx].max())
+        vmin = min(targets_np[idx].min(), reconstruction_np[idx].min())
+
+        axes[0].imshow(targets_np[idx].transpose(1, 2, 0).squeeze(), vmin=vmin, vmax=vmax)
+        axes[0].set_title('Original Target')
+        axes[0].axis('off')
+
+        axes[1].imshow(reconstruction_np[idx].transpose(1, 2, 0).squeeze(), vmin=vmin, vmax=vmax)
+        axes[1].set_title('Generator Reconstruction')
+        axes[1].axis('off')
+
+        plt.suptitle('CWGAN Random Reconstruction')
+        plt.tight_layout()
+        save_file = os.path.join(save_path, 'random_cwgan_reconstruction.png')
+        plt.savefig(save_file)
+        plt.close()
+        print(f"📊 Random reconstruction saved to {save_file}")
 
 def check_normalization(tensor, name="Tensor"):
     """

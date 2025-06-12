@@ -7,7 +7,7 @@ from scipy.spatial import Voronoi
 from skimage.draw import polygon
 from tqdm import tqdm
 from utils import sample_sensor_locations, voronoi_tesselate
-
+#TODO: 3 modes: voronoi, vitae, and full_reco (for VAE)
 def create_and_save_field_reco_dataset(
     path_to_nc,
     variables=[
