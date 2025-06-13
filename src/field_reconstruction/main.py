@@ -115,7 +115,7 @@ def main():
             percent=percent,
             reco_mode=reco_mode,
         )
-        evaluate(model_type, test_loader, model_path, variables)
+        evaluate(model_type, test_loader, model_path, variables, config)
 
     else:
         print("⚠️ No action specified. Use --train or --test.")

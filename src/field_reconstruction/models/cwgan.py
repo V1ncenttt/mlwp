@@ -8,7 +8,7 @@ class Generator(nn.Module):
     Adapted for 64x32 input to support 6 encoder steps.
     """
     
-    def __init__(self, in_channels=5, out_channels=5, *args, **kwargs):
+    def __init__(self, in_channels=6, out_channels=5, *args, **kwargs):
         super(Generator, self).__init__(*args, **kwargs)
         # Encoder blocks
         self.encoder1 = nn.Sequential(
@@ -73,8 +73,9 @@ class Generator(nn.Module):
             nn.BatchNorm2d(64),
             nn.ReLU()
         )
-        self.final = nn.ConvTranspose2d(69, out_channels, kernel_size=3, stride=1, padding=1)  # 64x32 -> 64x32
-
+        print(f"Output channels: {out_channels}")
+        self.final = nn.ConvTranspose2d(64, out_channels, kernel_size=3, stride=1, padding=1)  # 64x32 -> 64x32
+        # TODO: if no random 69
         initialize_weights_normal(self)
 
     def forward(self, x):
@@ -93,12 +94,12 @@ class Generator(nn.Module):
         dec4_out = self.decoder4(torch.cat([dec3_out, enc3_out], dim=1)) 
         dec5_out = self.decoder5(torch.cat([dec4_out, enc2_out], dim=1)) 
         dec6_out = self.decoder6(torch.cat([dec5_out, enc1_out], dim=1))
-        out = self.final(torch.cat([dec6_out, x], dim=1))  # Adding input x as skip connection for stability
+        out = self.final(dec6_out)  # Removing input x skip connection to keep output channels correct
         return out
     
 
 class Discriminator(nn.Module):
-    def __init__(self, in_channels=5, *args, **kwargs):
+    def __init__(self, in_channels=10, *args, **kwargs):
         super(Discriminator, self).__init__(*args, **kwargs)
         self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1)
         self.conv2 = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1)

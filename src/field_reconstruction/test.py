@@ -200,10 +200,11 @@ def evaluate_interp(test_loader, mode: str = 'cubic', nb_channels: int = 2, vari
         "l2_per_var": l2_errors,
     }
 
-def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
+def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, config_file=None):
     
     device = get_device()
-    
+    sample_input, _ = next(iter(test_loader))
+    sample_input = sample_input.to(device)
     nb_channels = sample_input.shape[1]
 
     if model_type == "cubic_interpolation":
@@ -213,8 +214,10 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
         evaluate_interp(test_loader, mode="kriging", nb_channels=nb_channels, variable_names=variable_names)
         return
 
-    model = create_model(model_type, nb_channels=nb_channels).to(device)
-
+    model = create_model(model_type, nb_channels=nb_channels)
+    if "gan" in model_type:
+        model = model[0]
+    model = model.to(device)
     checkpoint_path = os.path.join("models/saves", checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.eval()
@@ -238,9 +241,16 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None):
             elif "vitae" in model_type:
                 pred_dec, pred_enc = model(inputs)
                 preds = pred_dec
+            elif "gan" in model_type and 'gan_randomness' in config_file and config_file['gan_randomness'] == "True":
+                injection_mode = config_file['gan_injection_mode']
+                pass
             else:
+                if "gan" in model_type: 
+                    inputs = inputs[:, 1:, :, :]  # Skip the first channel if it's a mask
                 preds = model(inputs)
 
+            
+                
             batch_size, nb_channels, H, W = targets.shape
             rrmse_batch, mae_batch, ssim_batch = [], [], []
 

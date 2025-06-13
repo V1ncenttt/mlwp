@@ -41,8 +41,8 @@ tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
 test:
   test_dataset: 
-  model_path: vitae_large_model_25_0.078834.pth
-  model_type: vitae_large
+  model_path: generator_model_25_3200.635190.pth
+  model_type: cwgan_gp
 
 wandb:
   project: mlwp-thesis-fieldreco

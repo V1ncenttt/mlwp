@@ -204,7 +204,9 @@ def train_cwgan(generator, discriminator, data, model_save_path, config):
 
             # === Train Discriminator ===
             for _ in range(critic_iter):
-                z_fake = generator(fields_only).detach()
+                fields_only_random = torch.cat([fields_only, torch.randn_like(fields_only[:, :1])], dim=1)
+                # Now input to Generator is shape: (B, 6, 64, 32)
+                z_fake = generator(fields_only_random).detach()
                 real_input = torch.cat([fields_only, targets], dim=1)
                 fake_input = torch.cat([fields_only, z_fake], dim=1)
 
@@ -248,7 +250,8 @@ def train_cwgan(generator, discriminator, data, model_save_path, config):
                 grad_penalty_history.append(grad_penalty)
 
             # === Train Generator ===
-            z_fake = generator(fields_only)
+            fields_only_random = torch.cat([fields_only, torch.randn_like(fields_only[:, :1])], dim=1)
+            z_fake = generator(fields_only_random)
             fake_input = torch.cat([fields_only, z_fake], dim=1)
             fake_pred = discriminator(fake_input)
             g_loss = cwgan_generator_loss(fake_pred, z_fake, targets, lambda_l1)
@@ -311,7 +314,8 @@ def show_random_cwgan_reconstruction(generator, val_loader, device, save_path):
         fields_only = inputs[:, 1:, :, :]
 
         # Generate reconstruction
-        reconstruction = generator(fields_only)
+        fields_only_random = torch.cat([fields_only, torch.randn_like(fields_only[:, :1])], dim=1)
+        reconstruction = generator(fields_only_random)
 
         # Move tensors to cpu and convert to numpy
         inputs_np = inputs.cpu().numpy()
@@ -325,12 +329,14 @@ def show_random_cwgan_reconstruction(generator, val_loader, device, save_path):
         vmax = max(targets_np[idx].max(), reconstruction_np[idx].max())
         vmin = min(targets_np[idx].min(), reconstruction_np[idx].min())
 
-        axes[0].imshow(targets_np[idx].transpose(1, 2, 0).squeeze(), vmin=vmin, vmax=vmax)
-        axes[0].set_title('Original Target')
+        channel_to_plot = 0  # Plot only the first channel
+
+        axes[0].imshow(targets_np[idx, channel_to_plot], vmin=vmin, vmax=vmax)
+        axes[0].set_title(f'Original Target - Channel {channel_to_plot}')
         axes[0].axis('off')
 
-        axes[1].imshow(reconstruction_np[idx].transpose(1, 2, 0).squeeze(), vmin=vmin, vmax=vmax)
-        axes[1].set_title('Generator Reconstruction')
+        axes[1].imshow(reconstruction_np[idx, channel_to_plot], vmin=vmin, vmax=vmax)
+        axes[1].set_title(f'Generator Reconstruction - Channel {channel_to_plot}')
         axes[1].axis('off')
 
         plt.suptitle('CWGAN Random Reconstruction')

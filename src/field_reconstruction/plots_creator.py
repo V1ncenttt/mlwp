@@ -251,6 +251,10 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, 
                     elif "vitae" in model_name:
                         dex_x, enc_x = model(x_in)
                         pred = dex_x.squeeze().cpu().numpy()[ch]
+                    elif "gan" in model_name:
+                        #Remove first channel (mask) for GANs
+                        x_in = x_in[:, 1:, :, :]
+                        pred = model(x_in).squeeze().cpu().numpy()[ch]
                     else:
                         pred = model(x_in).squeeze().cpu().numpy()[ch]
 

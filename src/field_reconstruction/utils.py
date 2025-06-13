@@ -84,7 +84,7 @@ def create_model(model, nb_channels=2):
         return ReconstructionVAE(in_channels=nb_channels, out_channels=nb_channels-1, latent_dim=128)
     elif model == "cwgan_gp":
         from models.cwgan import Generator, Discriminator
-        return Generator(in_channels=nb_channels-1, out_channels=nb_channels-1), Discriminator(in_channels=2*nb_channels-2)
+        return Generator(in_channels=nb_channels, out_channels=nb_channels-1), Discriminator(in_channels=2*nb_channels-2)
     else:
         raise ValueError(f"Unknown model type: {model}")
 
