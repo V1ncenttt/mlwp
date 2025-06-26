@@ -61,15 +61,19 @@ def train(model_name, data, model_save_path, config):
     sample_input, _ = next(iter(train_loader))
     nb_channels = sample_input.shape[1]
     
-    model = create_model(model_name, nb_channels=nb_channels)
+    
     
     if "cwgan" in model_name.lower():
+        model = create_model(model_name, nb_channels=nb_channels-1)
         print("⚠️  Detected CWGAN model — using train_cwgan() instead of train()")
         generator, discriminator = model
         generator = generator.to(device)
         discriminator = discriminator.to(device)
         train_cwgan(generator, discriminator, data, model_save_path, config)
         return  # Exit normal train() after calling train_cwgan
+    else:
+        model = create_model(model_name, nb_channels=nb_channels)
+        print(f"🟢 Model created: {model_name} with input channels: {nb_channels}")
     
     model = model.to(device)
     criterion = get_loss_function(config)
@@ -155,6 +159,10 @@ def train_cwgan(generator, discriminator, data, model_save_path, config):
     device = get_device()
     train_loader = data["train_loader"]
     val_loader = data["val_loader"]
+    nb_channels = next(iter(train_loader))[0].shape[1] -1  # Get number of input channels from first batch
+    #Show input and output shapes of generator
+    print(f"🟢 Generator input channels: {nb_channels+1}")
+    print(f"🟢 Generator output channels: {generator.final.out_channels if hasattr(generator, 'final') else 'Unknown'}")
     #Print lr
     print(f"learning_rate: {config['learning_rate']}")
     lambda_gp = config.get("lambda_gp", 10)

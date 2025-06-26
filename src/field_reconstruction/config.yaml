@@ -41,8 +41,11 @@ tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
 test:
   test_dataset: 
-  model_path: generator_model_25_3200.635190.pth
+  model_path: generator_model_25_3472.404689.pth
   model_type: cwgan_gp
+
+injection_mode: first
+
 
 wandb:
   project: mlwp-thesis-fieldreco

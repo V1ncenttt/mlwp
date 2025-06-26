@@ -206,6 +206,7 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
     sample_input, _ = next(iter(test_loader))
     sample_input = sample_input.to(device)
     nb_channels = sample_input.shape[1]
+    print(f'model_type: {model_type}')
 
     if model_type == "cubic_interpolation":
         evaluate_interp(test_loader, mode=3, nb_channels=nb_channels, variable_names=variable_names)
@@ -213,10 +214,23 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
     elif model_type == "kriging":
         evaluate_interp(test_loader, mode="kriging", nb_channels=nb_channels, variable_names=variable_names)
         return
+    elif "gan" in model_type and 'injection_mode' in config_file and config_file['injection_mode'] == "first":
+        print("🟢 Evaluating GAN with random noise injection (1st layer)")
+        evaluate_ensemble_model(
+            model_type=model_type,
+            test_loader=test_loader,
+            checkpoint_path=checkpoint_path,
+            variable_names=variable_names,
+            config_file=config_file
+        )
+        return
 
     model = create_model(model_type, nb_channels=nb_channels)
     if "gan" in model_type:
         model = model[0]
+    # Insert channel check before loading state dict
+    print(f"🟢 Generator input channels: {nb_channels}")
+    print(f"🟢 Generator output channels: {model[-1].final.out_channels if hasattr(model[-1], 'final') else 'Unknown'}")
     model = model.to(device)
     checkpoint_path = os.path.join("models/saves", checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
@@ -337,3 +351,139 @@ def check_normalization(tensor, name="Tensor"):
     print(f"  Max:  {tensor_np.max():.4f}")
     print(f"  Mean: {tensor_np.mean():.4f}")
     print(f"  Std:  {tensor_np.std():.4f}")
+    
+
+def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_names=None, config_file=None, k=10):
+    """
+    Evaluate an ensemble model by averaging multiple predictions
+    """
+    
+    device = get_device()
+    sample_input, _ = next(iter(test_loader))
+    sample_input = sample_input.to(device)
+    nb_channels = sample_input.shape[1] -1
+
+    model = create_model(model_type, nb_channels=nb_channels)
+    
+    if "gan" in model_type:
+        model = model[0].to(device)
+        
+    print(f"🟢 Generator input channels: {nb_channels+1}")
+    print(f"🟢 Generator output channels: {model.final.out_channels if hasattr(model, 'final') else 'Unknown'}")
+    
+   
+    checkpoint_path = os.path.join("models/saves", checkpoint_path)
+    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    model.eval()
+    
+    print(f"✅ Loaded model from {checkpoint_path}")
+    print(f"✅ Evaluating model on {len(test_loader.dataset)} samples")
+    print(f"✅ Model type: {model_type}")
+    print(f"✅ Device: {device}")
+    
+    rrmse_total, mae_total, ssim_total = [], [], []
+    l2_errors = [[] for _ in range(nb_channels)]
+    n_total = 0
+
+    with torch.no_grad():
+        pbar = tqdm(test_loader, desc="Testing")
+        for inputs, targets in pbar:
+            inputs, targets = inputs.to(device), targets.to(device)
+            all_preds = []
+
+            for _ in range(k):
+                # Prepare random input for each ensemble member
+                if "gan" in model_type:
+                    inputs_mod = inputs[:, 1:, :, :]  # Skip the first channel if it's a mask
+                    z_random = torch.randn_like(inputs_mod[:, 0:1, :, :])  # shape: (B, 1, H, W)
+                    inputs_random = torch.cat([inputs_mod, z_random], dim=1)
+                    preds = model(inputs_random)
+                    #Print the shape of the predictions
+                    print(f"Predictions shape: {preds.shape}")
+                else:
+                    preds = model(inputs)
+                all_preds.append(preds.cpu().numpy())
+
+            all_preds = np.array(all_preds)  # shape: (k, B, C, H, W)
+            all_preds_mean = np.mean(all_preds, axis=0)  # shape: (B, C, H, W)
+            all_preds_var = np.var(all_preds, axis=0)
+
+            batch_size, nb_channels, H, W = targets.shape
+            rrmse_batch, mae_batch, ssim_batch = [], [], []
+
+            preds_np = all_preds_mean
+            targets_np = targets.detach().cpu().numpy()
+
+            # If model_type is GAN and input channel was reduced, output nb_channels may be less by 1
+            eval_channels = nb_channels
+            for v in range(eval_channels):
+                preds_v = preds_np[:, v, :, :]
+                targets_v = targets_np[:, v, :, :]
+
+                rrmse_val = np.sqrt(np.mean((preds_v - targets_v) ** 2)) / (np.sqrt(np.mean(targets_v ** 2)) + 1e-8)
+                mae_val = np.mean(np.abs(preds_v - targets_v))
+                ssim_val = np.mean([
+                    ssim(preds_v[i], targets_v[i], data_range=targets_v[i].max() - targets_v[i].min() + 1e-8)
+                    for i in range(preds_v.shape[0])
+                ])
+                l2_vals = np.mean((preds_v - targets_v) ** 2, axis=(1, 2))
+                l2_errors[v].extend(l2_vals.tolist())
+
+                rrmse_batch.append(rrmse_val)
+                mae_batch.append(mae_val)
+                ssim_batch.append(ssim_val)
+
+            rrmse_total.append(np.array(rrmse_batch) * batch_size)
+            mae_total.append(np.array(mae_batch) * batch_size)
+            ssim_total.append(np.array(ssim_batch) * batch_size)
+            n_total += batch_size
+
+            pbar.set_postfix({
+                "RRMSE": np.mean(rrmse_batch),
+                "MAE": np.mean(mae_batch),
+                "SSIM": np.mean(ssim_batch)
+            })
+
+    rrmse_total = np.sum(rrmse_total, axis=0) / n_total
+    mae_total = np.sum(mae_total, axis=0) / n_total
+    ssim_total = np.sum(ssim_total, axis=0) / n_total
+
+    if variable_names is None:
+        variable_names = [f"Var{i}" for i in range(len(rrmse_total))]
+
+    print("📈 Per-variable Metrics:")
+    for idx, var in enumerate(variable_names):
+        print(f"✅ {var}: RRMSE={rrmse_total[idx]:.4f}, MAE={mae_total[idx]:.4f}, SSIM={ssim_total[idx]:.4f}")
+
+    print("\n📊 Overall Averages:")
+    print(f"✅ Avg RRMSE={np.mean(rrmse_total):.4f}, Avg MAE={np.mean(mae_total):.4f}, Avg SSIM={np.mean(ssim_total):.4f}")
+
+    # Convert to dict
+    l2_errors_dict = {var: l2_errors[i] for i, var in enumerate(variable_names)}
+
+    # 📊 Plot L2 Error Distributions
+    save_dir = Path("plots/evaluation")
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    plot_l2_error_distributions(l2_errors_dict, variable_names, model_type, str(save_dir),)
+
+    plot_random_reconstruction(
+        model=model,
+        val_loader=test_loader,
+        device=device,
+        model_name=model_type,
+        save_dir=str(save_dir),
+        num_samples=7
+    )
+    return {
+        "rrmse": np.mean(rrmse_total),
+        "mae": np.mean(mae_total),
+        "ssim": np.mean(ssim_total),
+        "rrmse_per_var": rrmse_total,
+        "mae_per_var": mae_total,
+        "ssim_per_var": ssim_total,
+        "l2_per_var": l2_errors,
+    }
+
+                
+                    
