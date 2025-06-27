@@ -166,7 +166,7 @@ def train_cwgan(generator, discriminator, data, model_save_path, config):
     #Print lr
     print(f"learning_rate: {config['learning_rate']}")
     lambda_gp = config.get("lambda_gp", 10)
-    lambda_l1 = config.get("lambda_l1", 100)
+    lambda_l1 = config.get("lambda_l1", 1000)
     epochs = config["epochs"]
     critic_iter = config.get("critic_iter", 5)
 

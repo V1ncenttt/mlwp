@@ -353,7 +353,7 @@ def check_normalization(tensor, name="Tensor"):
     print(f"  Std:  {tensor_np.std():.4f}")
     
 
-def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_names=None, config_file=None, k=10):
+def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_names=None, config_file=None, k=25):
     """
     Evaluate an ensemble model by averaging multiple predictions
     """
@@ -399,7 +399,7 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
                     inputs_random = torch.cat([inputs_mod, z_random], dim=1)
                     preds = model(inputs_random)
                     #Print the shape of the predictions
-                    print(f"Predictions shape: {preds.shape}")
+                    #print(f"Predictions shape: {preds.shape}")
                 else:
                     preds = model(inputs)
                 all_preds.append(preds.cpu().numpy())
