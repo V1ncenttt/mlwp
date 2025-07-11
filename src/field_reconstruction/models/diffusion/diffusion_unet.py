@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 
 class Block(nn.Module):
@@ -164,7 +165,7 @@ class SimpleUnet(nn.Module):
         _, x = self.bottleneck(x, t) 
         
         # Upsampling path with skip connections
-        for i in range(len(self.ups)): #Upsampling
+        for i in range(len(self.upsampling)): #Upsampling
             if x.shape[-2:] != res[-i-1].shape[-2:]:
                 x = F.interpolate(x, size=res[-i-1].shape[-2:], mode='bilinear', align_corners=False)
             

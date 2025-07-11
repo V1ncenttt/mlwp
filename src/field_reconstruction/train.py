@@ -7,8 +7,17 @@ import random
 import numpy as np
 from utils import get_device, create_model
 import matplotlib.pyplot as plt
+import mlflow
+import mlflow.pytorch
+from mlflow.entities import Dataset
+
 from plots_creator import plot_voronoi_reconstruction_comparison, plot_random_reconstruction
 from loss_functions import cwgan_discriminator_loss, cwgan_generator_loss, get_loss_function
+from models.diffusion.diffusion_unet import SimpleUnet
+from models.fukami import FukamiNet
+
+mlflow.set_tracking_uri("http://localhost:5000")
+mlflow.set_experiment("diffusion-fieldreco")
 
 def get_optimizer(model, config):
     """
@@ -364,3 +373,49 @@ def check_normalization(tensor, name="Tensor"):
     print(f"  Max:  {tensor_np.max():.4f}")
     print(f"  Mean: {tensor_np.mean():.4f}")
     print(f"  Std:  {tensor_np.std():.4f}")
+    
+def train_diffusion_model(model, data, schedule, method, model_save_path, config):
+    """
+    Train a diffusion model using the specified schedule and method.
+    
+    Args:
+        model: Diffusion model instance.
+        data: Dict with 'train_loader' and 'val_loader'.
+        schedule: Noise schedule configuration.
+        method: Training method (e.g., 'ddpm', 'ddim').
+        model_save_path: Path to save the trained model.
+        config: Configuration parameters (dict).
+    """
+    #TODO: Use MLflow for logging
+    device = get_device()
+    train_loader = data["train_loader"]
+    val_loader = data["val_loader"]
+    
+    simple_unet = SimpleUnet(in_channels=4)
+    rn_rn_model = simple_unet.to(device)
+    print("SimpleUnet total trainable parameters:", sum(p.numel() for p in simple_unet.parameters()))
+    
+    with mlflow.start_run():
+        """
+        model_info = mlflow.pytorch.log_model(
+                pytorch_model=model,
+                name=f"diffusion-fieldreco-{epoch}",
+                params={
+                    "mode": "DDPM",
+                    "conditioning": "naive",
+                },
+                step=epoch,
+                input_example=train_loader.dataset[0][0].unsqueeze(0),  # Example input shape
+            )
+        
+        mlflow.log_metric(
+                key="accuracy",
+                value=compute_accuracy(scripted_model, X_train, y_train),
+                step=epoch,
+                model_id=model_info.model_id,
+                dataset=train_dataset
+            )
+        """
+        
+        pass
+    pass
