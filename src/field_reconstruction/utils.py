@@ -6,6 +6,7 @@ from models import FukamiNet, FukamiResNet, FukamiUNet, ReconstructionVAE, vitae
 import numpy as np
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
+from models.diffusion.diffusion_unet import SimpleUnet
 
 def voronoi_tesselate(sensor_coords, sensor_values, grid_shape):
     """
@@ -86,6 +87,9 @@ def create_model(model, nb_channels=2):
         from models.cwgan import Generator, Discriminator
         print(nb_channels)
         return Generator(in_channels=nb_channels+1, out_channels=nb_channels), Discriminator(in_channels=2*nb_channels)
+    elif model == "diffusion_naive":
+        
+        return SimpleUnet(in_channels=nb_channels*2+1)
     else:
         raise ValueError(f"Unknown model type: {model}")
 

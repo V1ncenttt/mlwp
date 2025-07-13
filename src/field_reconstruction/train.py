@@ -7,17 +7,20 @@ import random
 import numpy as np
 from utils import get_device, create_model
 import matplotlib.pyplot as plt
-import mlflow
-import mlflow.pytorch
-from mlflow.entities import Dataset
-
+#import mlflow
+#import mlflow.pytorch
+#from mlflow.entities import Dataset
+import torchvision
+import os
+    
 from plots_creator import plot_voronoi_reconstruction_comparison, plot_random_reconstruction
 from loss_functions import cwgan_discriminator_loss, cwgan_generator_loss, get_loss_function
 from models.diffusion.diffusion_unet import SimpleUnet
+from models.diffusion.ddpm import DDPM
 from models.fukami import FukamiNet
 
-mlflow.set_tracking_uri("http://localhost:5000")
-mlflow.set_experiment("diffusion-fieldreco")
+#mlflow.set_tracking_uri("http://127.0.0.1:5000")
+#mlflow.set_experiment("diffusion-fieldreco")
 
 def get_optimizer(model, config):
     """
@@ -71,7 +74,6 @@ def train(model_name, data, model_save_path, config):
     nb_channels = sample_input.shape[1]
     
     
-    
     if "cwgan" in model_name.lower():
         model = create_model(model_name, nb_channels=nb_channels-1)
         print("⚠️  Detected CWGAN model — using train_cwgan() instead of train()")
@@ -80,6 +82,12 @@ def train(model_name, data, model_save_path, config):
         discriminator = discriminator.to(device)
         train_cwgan(generator, discriminator, data, model_save_path, config)
         return  # Exit normal train() after calling train_cwgan
+    elif "diffusion" in model_name.lower():
+        print("⚠️  Detected Diffusion model — using train_diffusion_model() instead of train()")
+        model = create_model(model_name, nb_channels=nb_channels)
+        print(f"🟢 Diffusion model created: {model_name} with input channels: {nb_channels}")
+        train_diffusion_model(model, data, model_save_path, config)
+        return
     else:
         model = create_model(model_name, nb_channels=nb_channels)
         print(f"🟢 Model created: {model_name} with input channels: {nb_channels}")
@@ -374,7 +382,7 @@ def check_normalization(tensor, name="Tensor"):
     print(f"  Mean: {tensor_np.mean():.4f}")
     print(f"  Std:  {tensor_np.std():.4f}")
     
-def train_diffusion_model(model, data, schedule, method, model_save_path, config):
+def train_diffusion_model(model, data, model_save_path, config):
     """
     Train a diffusion model using the specified schedule and method.
     
@@ -386,36 +394,74 @@ def train_diffusion_model(model, data, schedule, method, model_save_path, config
         model_save_path: Path to save the trained model.
         config: Configuration parameters (dict).
     """
-    #TODO: Use MLflow for logging
     device = get_device()
+    rn_rn_model = model.to(device)
+    batch_size = config.get("batch_size", 32)
+    epochs = config["epochs"]
     train_loader = data["train_loader"]
     val_loader = data["val_loader"]
-    
-    simple_unet = SimpleUnet(in_channels=4)
-    rn_rn_model = simple_unet.to(device)
-    print("SimpleUnet total trainable parameters:", sum(p.numel() for p in simple_unet.parameters()))
-    
-    with mlflow.start_run():
-        """
-        model_info = mlflow.pytorch.log_model(
-                pytorch_model=model,
-                name=f"diffusion-fieldreco-{epoch}",
-                params={
-                    "mode": "DDPM",
-                    "conditioning": "naive",
-                },
-                step=epoch,
-                input_example=train_loader.dataset[0][0].unsqueeze(0),  # Example input shape
-            )
-        
-        mlflow.log_metric(
-                key="accuracy",
-                value=compute_accuracy(scripted_model, X_train, y_train),
-                step=epoch,
-                model_id=model_info.model_id,
-                dataset=train_dataset
-            )
-        """
-        
-        pass
-    pass
+
+    # Set T from config or default to 1000
+    T = config.get("timesteps", 1000)
+
+    print("Initializing DDPM model and optimizer...")
+    lr = 2e-4 * batch_size  # Learning rate scaled by batch size
+    ddpm = DDPM(rn_rn_model, (1e-4, 0.02), T).to(device)
+    optim = torch.optim.Adam(ddpm.parameters(), lr=lr)
+
+    # Get latent_shape from first batch
+    latent_shape = next(iter(train_loader))[0].shape
+
+    lastepoch = 0
+    """
+    load_checkpoint = False
+    if os.path.exists(model_path) and load_checkpoint:
+        print("Loading existing model checkpoint from:", model_path)
+        checkpoint = torch.load(model_path)
+        ddpm.load_state_dict(checkpoint['model_state_dict'])
+        optim.load_state_dict(checkpoint['optimizer_state_dict'])
+        lastepoch = checkpoint['epoch']
+    """
+    ddpm.to(device)
+
+
+    for i in range(lastepoch, epochs):
+        ddpm.train()
+        batch_pbar = tqdm(train_loader, leave=False)
+        loss_ema = None
+        loss_comb_ema = None
+
+        for inputs, targets in batch_pbar:
+            cond = inputs.to(device)
+            x = targets.to(device)
+            t = torch.randint(0, ddpm.n_T, (inputs.shape[0],), device=device) #Sample a random timestep
+            loss, _, _ = ddpm(x, cond, t)
+            loss_ema = loss.item() if loss_ema is None else 0.99 * loss_ema + 0.01 * loss.item()
+            #mlflow.log_metric("train_loss", loss_ema, step=i)
+            batch_pbar.set_description(f"Epoch {i} | Loss EMA: {loss_ema:.4f}")
+            loss.backward()
+            optim.step()
+
+        ddpm.eval()
+        with torch.no_grad():
+            # Generate samples and save images
+            latent_shape = x.shape
+            cond_sample = next(iter(val_loader))[0].to(device)[:16]
+            xh = ddpm.sample(16, (latent_shape[1], latent_shape[2], latent_shape[3]), device, cond=cond_sample)
+            grid = torchvision.utils.make_grid(xh, nrow=4, normalize=True)
+            save_path = os.path.join(model_save_path, f"ddpm_sample_epoch_{i}.png")
+            #torchvision.utils.save_image(grid, save_path)
+            print(f"🖼️ Sampled images saved to {save_path}")
+
+        # Log loss to MLflow and save checkpoint
+        #mlflow.log_metric("train_loss", loss_ema, step=i)
+        torch.save({
+            'epoch': i,
+            'model_state_dict': ddpm.state_dict(),
+            'optimizer_state_dict': optim.state_dict(),
+            'loss': loss_ema
+        }, os.path.join(model_save_path, f"ddpm_checkpoint_epoch_{i}.pt"))
+        print(f"💾 Checkpoint saved for epoch {i}")
+
+    print("✅ Training loop completed for diffusion model.")
+            

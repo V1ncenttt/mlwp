@@ -30,7 +30,7 @@ def get_dataset_mode(model_name):
     """
     Get the dataset mode based on the model name.
     """
-    if model_name in ["fukami", "vae", "fukami_resnet", "fukami_unet"]:
+    if model_name in ["fukami", "vae", "fukami_resnet", "fukami_unet"] or "diffusion" in model_name.lower():
         return "voronoi"
     elif "vitae" in model_name or "cwgan" in model_name:
         return "vitae"

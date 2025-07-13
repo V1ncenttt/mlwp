@@ -17,7 +17,7 @@ def ddpm_schedules(beta1: float = 0.0001, beta2: float = 0.02, num_timesteps: in
     
     assert beta1 < beta2, "beta1 must be less than beta2"
     
-    beta_t = torch.linspace(beta1, beta2, T+1) 
+    beta_t = torch.linspace(beta1, beta2, num_timesteps + 1)
     
     # Compute alpha t and alpha bar t (cumulative product)
     alpha_t = 1.0 - beta_t  

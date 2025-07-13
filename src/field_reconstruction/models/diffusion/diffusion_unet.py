@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import math
+import torch.nn.functional as F
 
 class Block(nn.Module):
     """
@@ -30,7 +30,7 @@ class Block(nn.Module):
             # use transpose for up 
             self.conv_3 = nn.ConvTranspose2d(out_ch, out_ch, kernel_size = 2, stride = 2) #3rd part
         else:
-            self.conv_3 = nn.Conv2d(out_ch, out_ch, kernel_size = 2, stride = 1, padding = 0)
+            self.conv_3 = nn.Conv2d(out_ch, out_ch, kernel_size = 2, stride = 2, padding = 0)
 
         self.relu = nn.ReLU()
 
@@ -100,16 +100,16 @@ class SimpleUnet(nn.Module):
     """
     A simplified variant of the Unet architecture for diffusion models.
     Includes time conditioning and skip connections.
-    
+
     Args:
         in_channels (int): Number of input image channels
     """
-    def __init__(self, in_channels=4):
+    def __init__(self, in_channels=11):  # 5 previous step + 6 conditioning
         super().__init__()
         image_channels = in_channels
         down_channels = (128, 256, 512)  # Limited the downsampling stages
         up_channels = (512, 256, 128)
-        out_dim = in_channels
+        out_dim = 5  # Output only the 5 denoised channels
         time_emb_dim = 256
 
         # Time embedding layers
@@ -127,7 +127,7 @@ class SimpleUnet(nn.Module):
             block = Block(down_channels[out_chn], down_channels[out_chn + 1], time_emb_dim, up=False)
             self.downsampling.append(block)
             
-        self.bottleneck = Block(down_channels[-1], down_channels[-1], time_emb_dim) # Bottleneck bloc
+        self.bottleneck = Block(down_channels[-1], down_channels[-1], time_emb_dim, up=False) # Bottleneck bloc
 
         self.upsampling = nn.ModuleList() #Upsampling part
         for i in range(len(up_channels) - 1):
@@ -136,20 +136,26 @@ class SimpleUnet(nn.Module):
         
         self.output_proj = nn.Conv2d(up_channels[-1], out_dim, kernel_size=3, padding=1) #Need to projeco
 
-    def forward(self, x, timestep):
+    def forward(self, x, timestep, cond):
         """
         Forward pass of the U-Net.
-        
+
         Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, channels, height, width)
+            x (torch.Tensor): Input tensor of shape (batch_size, 11, height, width)
             timestep (torch.Tensor): Current timestep for conditioning
-            
+
         Returns:
-            torch.Tensor: Output tensor of same shape as input
+            torch.Tensor: Output tensor of shape (batch_size, 5, height, width)
         """
         # Get time embeddings
         t = self.time_mlp(timestep) 
         
+        #Concatenate x with conditioning
+        if cond is not None:
+            x = torch.cat([x, cond], dim=1)
+        
+        if x.shape[1] != 11:  # Ensure input has 11 channels
+            raise ValueError(f"Input tensor must have 11 channels, got {x.shape[1]} channels instead.")
         # Initial convolution
         x = self.conv_0(x)
         
@@ -177,4 +183,3 @@ class SimpleUnet(nn.Module):
 
         return x  
         
- 

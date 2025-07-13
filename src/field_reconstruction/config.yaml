@@ -27,7 +27,7 @@ logging:
   use_wandb: true
 
 split_ratio: 0.8
-model: cwgan_gp
+model: diffusion_naive
 
 percent: 10
 batch_size: 32

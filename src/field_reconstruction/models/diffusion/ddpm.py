@@ -1,6 +1,6 @@
 import torch
 import torch.distributions as dist
-from noise_schedule import ddpm_schedules
+from models.diffusion.noise_schedule import ddpm_schedules
 import torch.nn as nn
 from typing import Tuple
 
@@ -42,7 +42,7 @@ class DDPM(nn.Module):
         self.normal_dist = dist.Normal(mean, std_dev)
         
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, cond: torch.Tensor, t: torch.Tensor = None) -> torch.Tensor:
         """
         Performs forward diffusion and predicts the noise added at timestep t.
         
@@ -80,12 +80,12 @@ class DDPM(nn.Module):
 
         # Step 4 & 5: Predict noise using eps_model and return loss
         # Note: timesteps are normalized to [0,1] range for the model
-        predicted_epsilon = self.eps_model(x_t, t / self.n_T)
+        predicted_epsilon = self.eps_model(x_t, t / self.n_T, cond)
         loss = self.criterion(predicted_epsilon, epsilon)
         
         return loss, epsilon, x_t
     
-    def sample(self, n_sample: int, size, device, t = 0) -> torch.Tensor:
+    def sample(self, n_sample: int, size, device, cond: torch.Tensor, t = 0) -> torch.Tensor:
         """
         Samples new images using the trained diffusion model.
         
@@ -107,7 +107,7 @@ class DDPM(nn.Module):
         # Gradually denoise the samples
         for i in range(self.n_T, t, -1):           
             t_i  = torch.full((n_sample,), i - 1).to(device) / self.n_T  
-            epsilon_i = self.eps_model(x_i, t_i) #Use the trained model
+            epsilon_i = self.eps_model(x_i, t_i, cond) #Use the trained model
             
             x_i = self.oneover_sqrta[i] * (x_i - self.mab_over_sqrtmab[i] * epsilon_i)
             

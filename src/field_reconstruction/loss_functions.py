@@ -106,5 +106,7 @@ def get_loss_function(config):
         return vitae_sl_loss_function
     elif "cwgan_gp" in loss:
         return None
+    elif "diffusion" in loss:
+        return None  # Placeholder for diffusion loss function, to be implemented separately
     else:
         raise ValueError(f"Unknown loss function type: {loss}")
