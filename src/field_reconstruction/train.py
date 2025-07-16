@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 #import mlflow.pytorch
 #from mlflow.entities import Dataset
 import torchvision
+import wandb
 import os
     
 from plots_creator import plot_voronoi_reconstruction_comparison, plot_random_reconstruction
@@ -21,6 +22,35 @@ from models.fukami import FukamiNet
 
 #mlflow.set_tracking_uri("http://127.0.0.1:5000")
 #mlflow.set_experiment("diffusion-fieldreco")
+wandb.login()
+run = None
+
+def initialize_wandb(model_name, config):
+    """
+    Initialize Weights & Biases for experiment tracking.
+    
+    Args:
+        model_name: Name of the model (str).
+        config: Configuration parameters (dict).
+    """
+    global run
+    
+    print("Initializing W&B run...")
+    run = wandb.init(
+        entity="vincent-lfve-imperial-college-london",
+        project="MLWP",
+        name=model_name,
+        config={
+            "learning_rate": config["learning_rate"],
+            "epochs": config["epochs"],
+            "batch_size": config["batch_size"],
+            "optimizer": config["optimizer"],
+            "loss": config["loss"]
+        },
+        reinit=True
+    )
+    print(f"Initialized W&B run: {run.id} for model: {model_name}")
+    return run
 
 def get_optimizer(model, config):
     """
@@ -394,6 +424,9 @@ def train_diffusion_model(model, data, model_save_path, config):
         model_save_path: Path to save the trained model.
         config: Configuration parameters (dict).
     """
+    global run
+    run = initialize_wandb(model_name="DiffusionModel", config=config)
+    
     device = get_device()
     rn_rn_model = model.to(device)
     batch_size = config.get("batch_size", 32)
@@ -437,8 +470,9 @@ def train_diffusion_model(model, data, model_save_path, config):
             t = torch.randint(0, ddpm.n_T, (inputs.shape[0],), device=device) #Sample a random timestep
             loss, _, _ = ddpm(x, cond, t)
             loss_ema = loss.item() if loss_ema is None else 0.99 * loss_ema + 0.01 * loss.item()
-            #mlflow.log_metric("train_loss", loss_ema, step=i)
+            print(f"Epoch {i} | Loss: {loss.item():.4f} | Loss EMA: {loss_ema:.4f}")
             batch_pbar.set_description(f"Epoch {i} | Loss EMA: {loss_ema:.4f}")
+            run.log({"train_loss": loss_ema, "epoch": i})
             loss.backward()
             optim.step()
 
@@ -448,10 +482,12 @@ def train_diffusion_model(model, data, model_save_path, config):
             latent_shape = x.shape
             cond_sample = next(iter(val_loader))[0].to(device)[:16]
             xh = ddpm.sample(16, (latent_shape[1], latent_shape[2], latent_shape[3]), device, cond=cond_sample)
-            grid = torchvision.utils.make_grid(xh, nrow=4, normalize=True)
-            save_path = os.path.join(model_save_path, f"ddpm_sample_epoch_{i}.png")
-            #torchvision.utils.save_image(grid, save_path)
-            print(f"🖼️ Sampled images saved to {save_path}")
+            for ch in range(xh.shape[1]):
+                channel_images = xh[:, ch:ch+1, :, :]  # (B, 1, H, W)
+                grid = torchvision.utils.make_grid(channel_images, nrow=4, normalize=True)
+                save_path = os.path.join(model_save_path, f"ddpm_sample_epoch_{i}_channel_{ch}.png")
+                torchvision.utils.save_image(grid, save_path)
+                print(f"🖼️ Sampled channel {ch} images saved to {save_path}")
 
         # Log loss to MLflow and save checkpoint
         #mlflow.log_metric("train_loss", loss_ema, step=i)
@@ -464,4 +500,5 @@ def train_diffusion_model(model, data, model_save_path, config):
         print(f"💾 Checkpoint saved for epoch {i}")
 
     print("✅ Training loop completed for diffusion model.")
+    run.finish()
             

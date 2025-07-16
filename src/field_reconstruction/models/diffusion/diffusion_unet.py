@@ -107,6 +107,7 @@ class SimpleUnet(nn.Module):
     def __init__(self, in_channels=11):  # 5 previous step + 6 conditioning
         super().__init__()
         image_channels = in_channels
+        print(f"Using {image_channels} input channels for the diffusion model.")
         down_channels = (128, 256, 512)  # Limited the downsampling stages
         up_channels = (512, 256, 128)
         out_dim = 5  # Output only the 5 denoised channels

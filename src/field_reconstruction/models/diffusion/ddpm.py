@@ -80,6 +80,7 @@ class DDPM(nn.Module):
 
         # Step 4 & 5: Predict noise using eps_model and return loss
         # Note: timesteps are normalized to [0,1] range for the model
+        
         predicted_epsilon = self.eps_model(x_t, t / self.n_T, cond)
         loss = self.criterion(predicted_epsilon, epsilon)
         
