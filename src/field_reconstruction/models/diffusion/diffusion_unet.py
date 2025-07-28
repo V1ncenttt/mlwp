@@ -183,4 +183,89 @@ class SimpleUnet(nn.Module):
         x = self.output_proj(x)
 
         return x  
+    
+class UnconditionalUnet(nn.Module):
+    """
+    A simplified variant of the Unet architecture for diffusion models.
+    Includes time conditioning and skip connections.
+
+    Args:
+        in_channels (int): Number of input image channels
+    """
+    def __init__(self, in_channels=5):  # 5 previous step + 6 conditioning
+        super().__init__()
+        image_channels = in_channels
+        print(f"Using {image_channels} input channels for the diffusion model.")
+        down_channels = (128, 256, 512)  # Limited the downsampling stages
+        up_channels = (512, 256, 128)
+        out_dim = 5  # Output only the 5 denoised channels
+        time_emb_dim = 256
+
+        # Time embedding layers
+        self.time_mlp = nn.Sequential(
+            SinusoidalPositionEmbeddings(time_emb_dim),
+            nn.Linear(time_emb_dim, time_emb_dim),
+            nn.ReLU()
+        )
+        
+        self.conv_0 = nn.Conv2d(in_channels, down_channels[0], kernel_size=3,  padding = 1) #Initial projection
+
+
+        self.downsampling = nn.ModuleList() #Downsampling part
+        for out_chn in range(len(down_channels)  - 1):
+            block = Block(down_channels[out_chn], down_channels[out_chn + 1], time_emb_dim, up=False)
+            self.downsampling.append(block)
+            
+        self.bottleneck = Block(down_channels[-1], down_channels[-1], time_emb_dim, up=False) # Bottleneck bloc
+
+        self.upsampling = nn.ModuleList() #Upsampling part
+        for i in range(len(up_channels) - 1):
+            self.upsampling.append(Block(up_channels[i] + down_channels[-i-1], up_channels[i+1], time_emb_dim, up=True))
+        
+        
+        self.output_proj = nn.Conv2d(up_channels[-1], out_dim, kernel_size=3, padding=1) #Need to projeco
+
+    def forward(self, x, timestep):
+        """
+        Forward pass of the U-Net.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, 11, height, width)
+            timestep (torch.Tensor): Current timestep for conditioning
+
+        Returns:
+            torch.Tensor: Output tensor of shape (batch_size, 5, height, width)
+        """
+        # Get time embeddings
+        t = self.time_mlp(timestep) 
+        
+
+        if x.shape[1] != 5:  # Ensure input has 5 channels
+            raise ValueError(f"Input tensor must have 5 channels, got {x.shape[1]} channels instead.")
+        # Initial convolution
+        x = self.conv_0(x)
+        
+        # Store intermediate outputs for skip connections
+        res = []
+
+        # Downsampling path
+        for down in self.downsampling:
+            x, _ = down(x, t)  
+            res.append(x)  
+
+        # Bottleneck
+        _, x = self.bottleneck(x, t) 
+        
+        # Upsampling path with skip connections
+        for i in range(len(self.upsampling)): #Upsampling
+            if x.shape[-2:] != res[-i-1].shape[-2:]:
+                x = F.interpolate(x, size=res[-i-1].shape[-2:], mode='bilinear', align_corners=False)
+            
+            x = torch.cat([x, res[-i-1]], dim=1) #Add the skip-connexions
+            
+            x, _ = self.upsampling[i](x, t)
+
+        x = self.output_proj(x)
+
+        return x
         

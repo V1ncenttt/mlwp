@@ -16,8 +16,8 @@ import os
     
 from plots_creator import plot_voronoi_reconstruction_comparison, plot_random_reconstruction
 from loss_functions import cwgan_discriminator_loss, cwgan_generator_loss, get_loss_function
-from models.diffusion.diffusion_unet import SimpleUnet
-from models.diffusion.ddpm import DDPM
+from models.diffusion.diffusion_unet import SimpleUnet, UnconditionalUnet
+from models.diffusion.ddpm import DDPM, UncondDDPM
 from models.fukami import FukamiNet
 
 #mlflow.set_tracking_uri("http://127.0.0.1:5000")
@@ -439,7 +439,7 @@ def train_diffusion_model(model, data, model_save_path, config):
 
     print("Initializing DDPM model and optimizer...")
     lr = 2e-4 * batch_size  # Learning rate scaled by batch size
-    ddpm = DDPM(rn_rn_model, (1e-4, 0.02), T).to(device)
+    ddpm = UncondDDPM(rn_rn_model, (1e-4, 0.02), T).to(device)
     optim = torch.optim.Adam(ddpm.parameters(), lr=lr)
 
     # Get latent_shape from first batch
@@ -468,11 +468,12 @@ def train_diffusion_model(model, data, model_save_path, config):
             cond = inputs.to(device)
             x = targets.to(device)
             t = torch.randint(0, ddpm.n_T, (inputs.shape[0],), device=device) #Sample a random timestep
-            loss, _, _ = ddpm(x, cond, t)
+            loss, _, _ = ddpm(x, t)
             loss_ema = loss.item() if loss_ema is None else 0.99 * loss_ema + 0.01 * loss.item()
             print(f"Epoch {i} | Loss: {loss.item():.4f} | Loss EMA: {loss_ema:.4f}")
             batch_pbar.set_description(f"Epoch {i} | Loss EMA: {loss_ema:.4f}")
             run.log({"train_loss": loss_ema, "epoch": i})
+            optim.zero_grad()
             loss.backward()
             optim.step()
 
@@ -481,7 +482,7 @@ def train_diffusion_model(model, data, model_save_path, config):
             # Generate samples and save images
             latent_shape = x.shape
             cond_sample = next(iter(val_loader))[0].to(device)[:16]
-            xh = ddpm.sample(16, (latent_shape[1], latent_shape[2], latent_shape[3]), device, cond=cond_sample)
+            xh = ddpm.sample(16, (latent_shape[1], latent_shape[2], latent_shape[3]), device)
             for ch in range(xh.shape[1]):
                 channel_images = xh[:, ch:ch+1, :, :]  # (B, 1, H, W)
                 grid = torchvision.utils.make_grid(channel_images, nrow=4, normalize=True)
