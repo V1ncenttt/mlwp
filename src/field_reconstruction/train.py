@@ -439,11 +439,23 @@ def train_diffusion_model(model, data, model_save_path, config):
 
     print("Initializing DDPM model and optimizer...")
     lr = 2e-4 * batch_size  # Learning rate scaled by batch size
-    ddpm = UncondDDPM(rn_rn_model, (1e-4, 0.02), T).to(device)
+    ddpm = DDPM(rn_rn_model, (1e-4, 0.02), T).to(device)
     optim = torch.optim.Adam(ddpm.parameters(), lr=lr)
 
     # Get latent_shape from first batch
     latent_shape = next(iter(train_loader))[0].shape
+    
+    # Estimate the dataset mean and std for the ddpm model
+    dataset_mean = torch.zeros(latent_shape[1], device=device)
+    dataset_std = torch.zeros(latent_shape[1], device=device)
+    for inputs, _ in train_loader:
+        inputs = inputs.to(device)
+        dataset_mean += inputs.mean(dim=(0, 2, 3))
+        dataset_std += inputs.std(dim=(0, 2, 3))
+    dataset_mean /= len(train_loader)
+    dataset_std /= len(train_loader)
+    print(f"Dataset mean: {dataset_mean.cpu().numpy()}")
+    print(f"Dataset std: {dataset_std.cpu().numpy()}")
 
     lastepoch = 0
     """
@@ -468,7 +480,7 @@ def train_diffusion_model(model, data, model_save_path, config):
             cond = inputs.to(device)
             x = targets.to(device)
             t = torch.randint(0, ddpm.n_T, (inputs.shape[0],), device=device) #Sample a random timestep
-            loss, _, _ = ddpm(x, t)
+            loss, _, _ = ddpm(x, cond, t)
             loss_ema = loss.item() if loss_ema is None else 0.99 * loss_ema + 0.01 * loss.item()
             print(f"Epoch {i} | Loss: {loss.item():.4f} | Loss EMA: {loss_ema:.4f}")
             batch_pbar.set_description(f"Epoch {i} | Loss EMA: {loss_ema:.4f}")
@@ -482,7 +494,7 @@ def train_diffusion_model(model, data, model_save_path, config):
             # Generate samples and save images
             latent_shape = x.shape
             cond_sample = next(iter(val_loader))[0].to(device)[:16]
-            xh = ddpm.sample(16, (latent_shape[1], latent_shape[2], latent_shape[3]), device)
+            xh = ddpm.sample(16, (latent_shape[1], latent_shape[2], latent_shape[3]), device, cond=cond_sample)
             for ch in range(xh.shape[1]):
                 channel_images = xh[:, ch:ch+1, :, :]  # (B, 1, H, W)
                 grid = torchvision.utils.make_grid(channel_images, nrow=4, normalize=True)

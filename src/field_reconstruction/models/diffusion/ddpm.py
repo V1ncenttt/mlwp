@@ -37,8 +37,8 @@ class DDPM(nn.Module):
         self.criterion = criterion
 
         # Initialize with dataset statistics for potentially better starting point
-        mean =  0.04640255868434906 #TODO: Replace with dataset mean
-        std_dev = 0.8382343649864197
+        mean =  0 #TODO: make more precise
+        std_dev = 1
         self.normal_dist = dist.Normal(mean, std_dev)
         
 
@@ -152,7 +152,16 @@ class UncondDDPM(nn.Module):
         std_dev = 0.8382343649864197
         self.normal_dist = dist.Normal(mean, std_dev)
         
-
+    def set_normal_dist(self, mean: float, std_dev: float) -> None:
+        """
+        Sets the mean and standard deviation for the noise distribution.
+        
+        Args:
+            mean (float): Mean of the noise distribution
+            std_dev (float): Standard deviation of the noise distribution
+        """
+        self.normal_dist = dist.Normal(mean, std_dev)
+        
     def forward(self, x: torch.Tensor, t: torch.Tensor = None) -> torch.Tensor:
         """
         Performs forward diffusion and predicts the noise added at timestep t.
