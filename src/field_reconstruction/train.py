@@ -502,8 +502,6 @@ def train_diffusion_model(model, data, model_save_path, config):
                 torchvision.utils.save_image(grid, save_path)
                 print(f"🖼️ Sampled channel {ch} images saved to {save_path}")
 
-        # Log loss to MLflow and save checkpoint
-        #mlflow.log_metric("train_loss", loss_ema, step=i)
         torch.save({
             'epoch': i,
             'model_state_dict': ddpm.state_dict(),

@@ -3,6 +3,8 @@ import os
 import numpy as np
 from tqdm import tqdm
 from models import FukamiNet, ReconstructionVAE
+from models.diffusion.diffusion_unet import SimpleUnet
+from models.diffusion.ddpm import DDPM
 import matplotlib.pyplot as plt
 from utils import get_device
 from plots_creator import plot_random_reconstruction, plot_l2_error_distributions
@@ -224,6 +226,17 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
             config_file=config_file
         )
         return
+    elif "diffusion" in model_type:
+        print("🟢 Evaluating Diffusion model")
+        evaluate_ensemble_model(
+            model_type=model_type,
+            test_loader=test_loader,
+            checkpoint_path=checkpoint_path,
+            variable_names=variable_names,
+            config_file=config_file
+        )
+        return
+       
 
     model = create_model(model_type, nb_channels=nb_channels)
     if "gan" in model_type:
@@ -363,17 +376,28 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
     sample_input = sample_input.to(device)
     nb_channels = sample_input.shape[1] -1
 
-    model = create_model(model_type, nb_channels=nb_channels)
+    
     
     if "gan" in model_type:
+        model = create_model(model_type, nb_channels=nb_channels)
         model = model[0].to(device)
+        print(f"🟢 Generator input channels: {nb_channels+1}")
+        print(f"🟢 Generator output channels: {model.final.out_channels if hasattr(model, 'final') else 'Unknown'}")
+    elif "diffusion" in model_type:
+        model = create_model(model_type, nb_channels=nb_channels+1)
+        T = 1000  # Number of diffusion steps, can be adjusted
+        rn_rn_model = model.to(device)
+        ddpm = DDPM(rn_rn_model, (1e-4, 0.02), T).to(device)
+        model = ddpm
         
-    print(f"🟢 Generator input channels: {nb_channels+1}")
-    print(f"🟢 Generator output channels: {model.final.out_channels if hasattr(model, 'final') else 'Unknown'}")
-    
-   
     checkpoint_path = os.path.join("models/saves", checkpoint_path)
-    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    
+    if "diffusion" in model_type:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        
     model.eval()
     
     print(f"✅ Loaded model from {checkpoint_path}")
@@ -400,6 +424,18 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
                     preds = model(inputs_random)
                     #Print the shape of the predictions
                     #print(f"Predictions shape: {preds.shape}")
+                elif "diffusion" in model_type:
+                    # Use the ddpm model to generate predictions. dont skip the first channel. to get the predictions we need sample()
+                    cond = inputs  # Use full inputs as conditioning (including mask)
+                    batch_size, _, H, W = targets.shape
+                    
+                    # Generate samples using the DDPM
+                    preds = model.sample(
+                        n_sample=batch_size,
+                        size=(nb_channels, H, W),  # Size of the target tensor
+                        device=device,
+                        cond=cond  # Pass conditioning tensor
+                    )
                 else:
                     preds = model(inputs)
                 all_preds.append(preds.cpu().numpy())

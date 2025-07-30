@@ -89,6 +89,8 @@ def create_model(model, nb_channels=2):
         return Generator(in_channels=nb_channels+1, out_channels=nb_channels), Discriminator(in_channels=2*nb_channels)
     elif model == "diffusion_naive":
         return SimpleUnet(in_channels=2*nb_channels-1)
+    elif model == "diffusion_unconditional":
+        return UnconditionalUnet(in_channels=nb_channels-1)
     else:
         raise ValueError(f"Unknown model type: {model}")
 
