@@ -16,7 +16,7 @@ from models import FukamiNet, ReconstructionVAE
 from train import train
 from test import evaluate
 from prepare_data import create_and_save_field_reco_dataset, load_field_reco_dataloaders
-
+from experiments.sparsity.sparsity_datasets_generator import generate_sparsity_datasets
 def get_config_params():
     """
     Load configuration parameters from a YAML file.
@@ -36,7 +36,55 @@ def get_dataset_mode(model_name):
         return "vitae"
     else:
         raise ValueError(f"Unknown model name: {model_name}")
+  
+def check_sparsity_datasets_exist():
+    """
+    Check if sparsity datasets exist in the expected directory.
+    Returns True if all expected datasets are found, False otherwise.
+    """
+    datasets_loc = "../../data/weatherbench2_fieldreco/sparsity/"
     
+    # Expected percentages and modes
+    percentages = [0.5, 1, 2, 5, 7.5, 20]
+    modes = ["voronoi", "vitae"]
+    
+    # Variable prefix for filename
+    variables_prefix = "2m_temperature_10m_u_component_of_wind_10m_v_component_of_wind_mean_sea_level_pressure_total_column_water_vapour"
+    
+    # Check if directory exists
+    if not os.path.exists(datasets_loc):
+        print(f"❌ Sparsity datasets directory does not exist: {datasets_loc}")
+        return False
+    
+    missing_files = []
+    total_expected = len(percentages) * len(modes)  # 6 percentages × 2 modes = 12 files
+    found_files = 0
+    
+    print(f"🔍 Checking for sparsity datasets in {datasets_loc}")
+    
+    for percentage in percentages:
+        for mode in modes:
+            # Construct expected filename
+            filename = f"{variables_prefix}_{percentage}p_{mode}_5vars_test.pt"
+            filepath = os.path.join(datasets_loc, filename)
+            
+            if os.path.exists(filepath):
+                found_files += 1
+                print(f"✅ Found: {filename}")
+            else:
+                missing_files.append(filename)
+                print(f"❌ Missing: {filename}")
+    
+    print(f"\n📊 Summary: Found {found_files}/{total_expected} sparsity datasets")
+    
+    if missing_files:
+        print(f"❌ Missing {len(missing_files)} files:")
+        for file in missing_files:
+            print(f"   - {file}")
+        return False
+    else:
+        print("✅ All sparsity datasets found!")
+        return True
 def main():
     print("🚀 Field Reconstruction Pipeline")
 
@@ -45,6 +93,7 @@ def main():
     parser.add_argument("--test", action="store_true", help="Test the model")
     parser.add_argument("--num_sensors", type=int, default=100, help="Number of sensors to sample")
     parser.add_argument("--model_path", type=str, default=None, help="Path to the trained model/save path")
+    parser.add_argument("--sparsity", action="store_true", help="Generate sparsity datasets")
     args = parser.parse_args()
 
     config = get_config_params()
@@ -116,7 +165,16 @@ def main():
             reco_mode=reco_mode,
         )
         evaluate(model_type, test_loader, model_path, variables, config)
-
+    elif args.sparsity:
+        print(f"📊 Generating sparsity datasets...")
+        if not check_sparsity_datasets_exist():
+            print("❌ Some sparsity datasets are missing. Generating them...")
+            generate_sparsity_datasets()
+        else:
+            print("✅ All sparsity datasets already exist. Skipping generation.")
+            # If you want to regenerate, uncomment the next line
+        
+        
     else:
         print("⚠️ No action specified. Use --train or --test.")
 

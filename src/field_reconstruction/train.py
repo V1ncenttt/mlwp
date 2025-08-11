@@ -13,11 +13,19 @@ import matplotlib.pyplot as plt
 import torchvision
 import wandb
 import os
+try:
+    from coolname import generate_slug
+except ImportError:
+    print("⚠️ coolname not installed. Install with: pip install coolname")
+    def generate_slug(words=2):
+        adjectives = ["swift", "bold", "clever", "bright", "calm", "wild", "quiet", "brave"]
+        animals = ["panda", "tiger", "wolf", "eagle", "fox", "bear", "deer", "lion"]
+        return f"{random.choice(adjectives)}-{random.choice(animals)}"
     
 from plots_creator import plot_voronoi_reconstruction_comparison, plot_random_reconstruction
 from loss_functions import cwgan_discriminator_loss, cwgan_generator_loss, get_loss_function
 from models.diffusion.diffusion_unet import SimpleUnet, UnconditionalUnet
-from models.diffusion.ddpm import DDPM, UncondDDPM
+from models.diffusion.ddpm import DDPM, UncondDDPM, DDIM
 from models.fukami import FukamiNet
 
 #mlflow.set_tracking_uri("http://127.0.0.1:5000")
@@ -114,8 +122,10 @@ def train(model_name, data, model_save_path, config):
         return  # Exit normal train() after calling train_cwgan
     elif "diffusion" in model_name.lower():
         print("⚠️  Detected Diffusion model — using train_diffusion_model() instead of train()")
-        model = create_model(model_name, nb_channels=nb_channels)
-        print(f"🟢 Diffusion model created: {model_name} with input channels: {nb_channels}")
+        # Create model with 5 input channels (target data only) 
+        # Conditioning will be handled separately in the new architecture
+        model = create_model(model_name, nb_channels=5)  # Only target channels
+        print(f"🟢 Diffusion model created: {model_name} with 5 input channels and separate conditioning")
         train_diffusion_model(model, data, model_save_path, config)
         return
     else:
@@ -411,6 +421,130 @@ def check_normalization(tensor, name="Tensor"):
     print(f"  Max:  {tensor_np.max():.4f}")
     print(f"  Mean: {tensor_np.mean():.4f}")
     print(f"  Std:  {tensor_np.std():.4f}")
+
+def compute_rrmse(predictions, targets):
+    """
+    Compute Relative Root Mean Square Error (RRMSE) using standard definition.
+    RRMSE = RMSE / RMS(targets) = sqrt(MSE) / sqrt(mean(targets^2))
+    
+    Args:
+        predictions (torch.Tensor): Model predictions
+        targets (torch.Tensor): Ground truth targets
+        
+    Returns:
+        float: RRMSE value
+    """
+    mse = torch.mean((predictions - targets) ** 2)
+    rmse = torch.sqrt(mse)
+    target_rms = torch.sqrt(torch.mean(targets ** 2))  # Root Mean Square of targets
+    rrmse = rmse / target_rms if target_rms > 0 else rmse
+    
+    # Debug prints
+    print(f"  Debug - MSE: {mse.item():.6f}, RMSE: {rmse.item():.6f}, Target RMS: {target_rms.item():.6f}")
+    print(f"  Debug - Pred range: [{predictions.min().item():.4f}, {predictions.max().item():.4f}]")
+    print(f"  Debug - Target range: [{targets.min().item():.4f}, {targets.max().item():.4f}]")
+    
+    return rrmse.item()
+
+def compute_mae(predictions, targets):
+    """
+    Compute Mean Absolute Error (MAE).
+    
+    Args:
+        predictions (torch.Tensor): Model predictions
+        targets (torch.Tensor): Ground truth targets
+        
+    Returns:
+        float: MAE value
+    """
+    mae = torch.mean(torch.abs(predictions - targets))
+    return mae.item()
+
+def validate_diffusion_model(ddpm, val_loader, device, num_samples=100, num_predictions=5):
+    """
+    Validate the diffusion model by generating multiple samples and computing metrics.
+    
+    Args:
+        ddpm: Trained diffusion model
+        val_loader: Validation data loader
+        device: Device to run computations on
+        num_samples: Number of validation samples to evaluate
+        num_predictions: Number of predictions to generate per sample and average
+        
+    Returns:
+        dict: Dictionary containing validation metrics
+    """
+    ddpm.eval()
+    total_rrmse = 0.0
+    total_mae = 0.0
+    num_batches = 0
+    samples_processed = 0
+    
+    print(f"📊 Generating {num_predictions} predictions per sample for robust validation...")
+    
+    with torch.no_grad():
+        for inputs, targets in val_loader:
+            if samples_processed >= num_samples:
+                break
+                
+            # Move to device - separate conditioning and targets
+            cond = inputs.to(device)     # Conditioning data (batch, 6, H, W)
+            targets = targets.to(device) # Target data (batch, 5, H, W)
+            
+            # Generate predictions using DDIM sampling
+            batch_size = min(targets.shape[0], num_samples - samples_processed)
+            if batch_size < targets.shape[0]:
+                cond = cond[:batch_size]
+                targets = targets[:batch_size]
+            
+            # Generate multiple predictions and average them
+            predictions_list = []
+            for pred_idx in range(num_predictions):
+                # Sample from the diffusion model
+                if isinstance(ddpm, DDIM):
+                    single_prediction = ddpm.sample(
+                        n_sample=batch_size,
+                        size=(targets.shape[1], targets.shape[2], targets.shape[3]),
+                        device=device,
+                        cond=cond,
+                        eta=0.0,  # Deterministic sampling for validation
+                        ddim_steps=25  # Fewer steps for faster validation
+                    )
+                else:  # Default to DDPM sampling
+                    single_prediction = ddpm.sample(
+                        n_sample=batch_size,
+                        size=(targets.shape[1], targets.shape[2], targets.shape[3]),
+                        device=device,
+                        cond=cond,
+                    )
+                predictions_list.append(single_prediction)
+                
+            # Average the predictions
+            predictions = torch.stack(predictions_list, dim=0).mean(dim=0)
+            
+            # Compute metrics for this batch
+            batch_rrmse = compute_rrmse(predictions, targets)
+            batch_mae = compute_mae(predictions, targets)
+            
+            total_rrmse += batch_rrmse
+            total_mae += batch_mae
+            num_batches += 1
+            samples_processed += batch_size
+            
+            print(f"  Validated {samples_processed}/{num_samples} samples...")
+    
+    # Average metrics across all batches
+    avg_rrmse = total_rrmse / num_batches if num_batches > 0 else 0.0
+    avg_mae = total_mae / num_batches if num_batches > 0 else 0.0
+    
+    print(f"✅ Validation complete with {num_predictions} predictions per sample")
+    
+    return {
+        'val_rrmse': avg_rrmse,
+        'val_mae': avg_mae,
+        'samples_evaluated': samples_processed,
+        'predictions_per_sample': num_predictions
+    }
     
 def train_diffusion_model(model, data, model_save_path, config):
     """
@@ -425,37 +559,62 @@ def train_diffusion_model(model, data, model_save_path, config):
         config: Configuration parameters (dict).
     """
     global run
-    run = initialize_wandb(model_name="DiffusionModel", config=config)
+    
+    # Generate a unique model name
+    model_slug = generate_slug(3)
+    model_name = f"ddpm-{model_slug}"
+    
+    run = initialize_wandb(model_name=model_name, config=config)
     
     device = get_device()
     rn_rn_model = model.to(device)
-    batch_size = config.get("batch_size", 32)
+    batch_size = config.get("batch_size", 64)
     epochs = config["epochs"]
     train_loader = data["train_loader"]
     val_loader = data["val_loader"]
 
-    # Set T from config or default to 1000
-    T = config.get("timesteps", 1000)
+    # Set T from config or default to 50
+    T = config.get("timesteps", 500)
 
     print("Initializing DDPM model and optimizer...")
-    lr = 2e-4 * batch_size  # Learning rate scaled by batch size
+    lr = 2e-3
     ddpm = DDPM(rn_rn_model, (1e-4, 0.02), T).to(device)
-    optim = torch.optim.Adam(ddpm.parameters(), lr=lr)
-
-    # Get latent_shape from first batch
-    latent_shape = next(iter(train_loader))[0].shape
+    optim = torch.optim.Adam(ddpm.parameters(), lr=lr, weight_decay=0.01)
     
-    # Estimate the dataset mean and std for the ddpm model
-    dataset_mean = torch.zeros(latent_shape[1], device=device)
-    dataset_std = torch.zeros(latent_shape[1], device=device)
-    for inputs, _ in train_loader:
-        inputs = inputs.to(device)
-        dataset_mean += inputs.mean(dim=(0, 2, 3))
-        dataset_std += inputs.std(dim=(0, 2, 3))
-    dataset_mean /= len(train_loader)
-    dataset_std /= len(train_loader)
-    print(f"Dataset mean: {dataset_mean.cpu().numpy()}")
-    print(f"Dataset std: {dataset_std.cpu().numpy()}")
+    # Add cosine annealing with warm restarts scheduler
+    T_0 = max(1, epochs // 4)  # Initial restart period (every 25% of total epochs)
+    T_mult = 2  # Multiply restart period by this factor after each restart
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optim, 
+        T_0=T_0, 
+        T_mult=T_mult, 
+        eta_min=lr*0.001,
+    )
+    print(f"📈 Added cosine annealing warm restarts scheduler: lr={lr:.2e} -> eta_min={lr*0.01:.2e}")
+    print(f"📈 Restart schedule: T_0={T_0}, T_mult={T_mult} (restarts every {T_0}, {T_0*T_mult}, {T_0*T_mult**2}, ... epochs)")
+    
+    # Log key hyperparameters to W&B
+    run.log({
+        "model_name": model_name,
+        "model_slug": model_slug,
+        "initial_learning_rate": lr,
+        "sampling":"ddpm",  # Indicate DDPM sampling method
+        "timesteps_T": T,
+        "batch_size": batch_size,
+        "conditioning": "FiLM",  # Separate conditioning input
+        "optimizer": "Adam",
+        "scheduler": "CosineAnnealingWarmRestarts",
+        "scheduler_T_0": T_0,
+        "scheduler_T_mult": T_mult,
+        "min_learning_rate": lr * 0.01,
+        "total_epochs": epochs
+    })
+    print(f"📊 Logged hyperparameters - Model: {model_name}, LR: {lr:.2e}, T: {T}, Batch Size: {batch_size}")
+
+    # Get latent_shape from first batch (target data only)
+    sample_batch = next(iter(train_loader))
+    latent_shape = sample_batch[1].shape  # targets shape (batch, 5, H, W)
+
 
     lastepoch = 0
     """
@@ -465,6 +624,8 @@ def train_diffusion_model(model, data, model_save_path, config):
         checkpoint = torch.load(model_path)
         ddpm.load_state_dict(checkpoint['model_state_dict'])
         optim.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'scheduler_state_dict' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         lastepoch = checkpoint['epoch']
     """
     ddpm.to(device)
@@ -474,42 +635,121 @@ def train_diffusion_model(model, data, model_save_path, config):
         ddpm.train()
         batch_pbar = tqdm(train_loader, leave=False)
         loss_ema = None
-        loss_comb_ema = None
 
+        # Training loop
         for inputs, targets in batch_pbar:
-            cond = inputs.to(device)
-            x = targets.to(device)
-            t = torch.randint(0, ddpm.n_T, (inputs.shape[0],), device=device) #Sample a random timestep
-            loss, _, _ = ddpm(x, cond, t)
+            # Separate conditioning and target data for new UNet architecture
+            cond = inputs.to(device)  # Full conditioning input (batch, 6, H, W)
+            x = targets.to(device)    # Target data only (batch, 5, H, W)
+            
+            t = torch.randint(0, ddpm.n_T, (x.shape[0],), device=device) #Sample a random timestep
+            loss, _, _ = ddpm(x, cond, t)  # Pass x and cond separately
             loss_ema = loss.item() if loss_ema is None else 0.99 * loss_ema + 0.01 * loss.item()
+            
+            # Log individual batch loss (like before)
             print(f"Epoch {i} | Loss: {loss.item():.4f} | Loss EMA: {loss_ema:.4f}")
             batch_pbar.set_description(f"Epoch {i} | Loss EMA: {loss_ema:.4f}")
-            run.log({"train_loss": loss_ema, "epoch": i})
+            
+            # Log to W&B every batch (like before)
+            run.log({"train_loss": loss.item(), "train_loss_ema": loss_ema, "epoch": i})
+            
             optim.zero_grad()
             loss.backward()
             optim.step()
 
-        ddpm.eval()
-        with torch.no_grad():
-            # Generate samples and save images
-            latent_shape = x.shape
-            cond_sample = next(iter(val_loader))[0].to(device)[:16]
-            xh = ddpm.sample(16, (latent_shape[1], latent_shape[2], latent_shape[3]), device, cond=cond_sample)
-            for ch in range(xh.shape[1]):
-                channel_images = xh[:, ch:ch+1, :, :]  # (B, 1, H, W)
-                grid = torchvision.utils.make_grid(channel_images, nrow=4, normalize=True)
-                save_path = os.path.join(model_save_path, f"ddpm_sample_epoch_{i}_channel_{ch}.png")
-                torchvision.utils.save_image(grid, save_path)
-                print(f"🖼️ Sampled channel {ch} images saved to {save_path}")
+        # Validation phase (less frequent, only every 5 epochs to save time)
+        if i % 5 == 0 or i == epochs - 1:
+            print(f"🔍 Running validation for epoch {i}...")
+            val_metrics = validate_diffusion_model(ddpm, val_loader, device, num_samples=200, num_predictions=5)
+            
+            # Log validation metrics to W&B
+            val_metrics_log = {
+                "val_rrmse": val_metrics['val_rrmse'],
+                "val_mae": val_metrics['val_mae'],
+                "epoch": i,
+                "samples_evaluated": val_metrics['samples_evaluated'],
+                "predictions_per_sample": val_metrics['predictions_per_sample']
+            }
+            run.log(val_metrics_log)
+            
+            print(f"📊 Epoch {i} | Loss: {loss_ema:.4f} | Val RRMSE: {val_metrics['val_rrmse']:.4f} | Val MAE: {val_metrics['val_mae']:.4f}")
+        else:
+            print(f"📊 Epoch {i} | Loss: {loss_ema:.4f}")
 
-        torch.save({
+        # Generate and save sample images (every few epochs to save time)
+        if i % 10 == 0 or i == epochs - 1:
+            ddpm.eval()
+            with torch.no_grad():
+                # Get conditioning samples from validation set
+                sample_batch = next(iter(val_loader))
+                cond_sample = sample_batch[0].to(device)[:16]  # Conditioning data
+                target_sample = sample_batch[1][:16]  # Target shape reference
+                if isinstance(ddpm, DDIM):
+                    xh = ddpm.sample(16, (target_sample.shape[1], target_sample.shape[2], target_sample.shape[3]), device, cond=cond_sample, eta=0.0, ddim_steps=25)
+                else:
+                    xh = ddpm.sample(16, (target_sample.shape[1], target_sample.shape[2], target_sample.shape[3]), device, cond=cond_sample)
+                for ch in range(xh.shape[1]):
+                    channel_images = xh[:, ch:ch+1, :, :]  # (B, 1, H, W)
+                    grid = torchvision.utils.make_grid(channel_images, nrow=4, normalize=True)
+                    save_path = os.path.join(model_save_path, f"ddpm_sample_epoch_{i}_channel_{ch}.png")
+                    torchvision.utils.save_image(grid, save_path)
+                print(f"🖼️ Sample images saved for epoch {i}")
+
+        # Save checkpoint
+        checkpoint_data = {
             'epoch': i,
             'model_state_dict': ddpm.state_dict(),
             'optimizer_state_dict': optim.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
             'loss': loss_ema
-        }, os.path.join(model_save_path, f"ddpm_checkpoint_epoch_{i}.pt"))
+        }
+        
+        # Add validation metrics if available
+        if i % 5 == 0 or i == epochs - 1:
+            checkpoint_data['val_rrmse'] = val_metrics['val_rrmse']
+            checkpoint_data['val_mae'] = val_metrics['val_mae']
+            
+        torch.save(checkpoint_data, os.path.join(model_save_path, f"ddpm_checkpoint_epoch_{i}.pt"))
         print(f"💾 Checkpoint saved for epoch {i}")
+        
+        # Step the scheduler
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+        print(f"📈 Learning rate updated to: {current_lr:.2e}")
+        run.log({"learning_rate": current_lr})
 
     print("✅ Training loop completed for diffusion model.")
+    
+    # Run final validation
+    print("🔍 Running final validation...")
+    final_val_metrics = validate_diffusion_model(ddpm, val_loader, device, num_samples=500, num_predictions=5)
+    
+    # Save the final model with the generated name
+    final_model_path = f"models/{model_name}.pth"
+    os.makedirs("models", exist_ok=True)
+    torch.save({
+        'model_state_dict': ddpm.state_dict(),
+        'optimizer_state_dict': optim.state_dict(),
+        'model_name': model_name,
+        'model_slug': model_slug,
+        'config': config,
+        'final_epoch': epochs,
+        'final_loss': loss_ema,
+        'final_val_rrmse': final_val_metrics['val_rrmse'],
+        'final_val_mae': final_val_metrics['val_mae']
+    }, final_model_path)
+    
+    print(f"🎉 Model saved as {final_model_path}")
+    print(f"📊 Final metrics - Loss: {loss_ema:.4f} | RRMSE: {final_val_metrics['val_rrmse']:.4f} | MAE: {final_val_metrics['val_mae']:.4f}")
+    
+    # Log the final model path and metrics to W&B
+    run.log({
+        "final_model_path": final_model_path,
+        "final_val_rrmse": final_val_metrics['val_rrmse'],
+        "final_val_mae": final_val_metrics['val_mae'],
+        "training_completed": True
+    })
+    
     run.finish()
+    return ddpm
             

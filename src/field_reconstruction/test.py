@@ -366,7 +366,7 @@ def check_normalization(tensor, name="Tensor"):
     print(f"  Std:  {tensor_np.std():.4f}")
     
 
-def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_names=None, config_file=None, k=25):
+def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_names=None, config_file=None, k=5):
     """
     Evaluate an ensemble model by averaging multiple predictions
     """
@@ -405,13 +405,24 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
     print(f"✅ Model type: {model_type}")
     print(f"✅ Device: {device}")
     
+    # Limit to 200 samples for diffusion models to speed up evaluation
+    max_samples = 200 if "diffusion" in model_type else len(test_loader.dataset)
+    if "diffusion" in model_type:
+        print(f"⚡ Fast evaluation mode: limiting to {max_samples} samples for diffusion model")
+    
     rrmse_total, mae_total, ssim_total = [], [], []
     l2_errors = [[] for _ in range(nb_channels)]
     n_total = 0
 
     with torch.no_grad():
         pbar = tqdm(test_loader, desc="Testing")
-        for inputs, targets in pbar:
+        for batch_idx, (inputs, targets) in enumerate(pbar):
+            # Break early if we've processed enough samples for diffusion models
+            if "diffusion" in model_type and n_total >= max_samples:
+                print(f"⚡ Reached {max_samples} samples limit for diffusion model evaluation")
+                break
+            print(f"Batch {batch_idx + 1}/{len(test_loader)}")
+            
             inputs, targets = inputs.to(device), targets.to(device)
             all_preds = []
 

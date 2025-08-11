@@ -4,12 +4,11 @@ import math
 import torch.nn.functional as F
 from abc import ABC, abstractmethod
 
-class ConditioningMethod(ABC):
+class ConditioningMethod(nn.Module, ABC):
     """Abstract base class for conditioning methods."""
     
-    @abstractmethod
     def __init__(self, cond_channels, feature_channels, **kwargs):
-        pass
+        super().__init__()
     
     @abstractmethod
     def encode_conditioning(self, cond):
@@ -26,12 +25,13 @@ class SpatialConditioning(ConditioningMethod):
     """Original spatial conditioning method (our current approach)."""
     
     def __init__(self, cond_channels, feature_channels, **kwargs):
+        super().__init__(cond_channels, feature_channels, **kwargs)
         self.cond_encoder = nn.Sequential(
             nn.Conv2d(cond_channels, 64, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Conv2d(64, 256, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(cond_channels, 256, 1),  # Point-wise conv
+            nn.Conv2d(256, 256, 1),  # Point-wise conv - fixed from cond_channels to 256
         )
         self.cond_conv = nn.Conv2d(256, feature_channels, 1)
     
@@ -51,6 +51,7 @@ class FiLMConditioning(ConditioningMethod):
     """Feature-wise Linear Modulation (FiLM) conditioning."""
     
     def __init__(self, cond_channels, feature_channels, **kwargs):
+        super().__init__(cond_channels, feature_channels, **kwargs)
         self.cond_encoder = nn.Sequential(
             nn.Conv2d(cond_channels, 64, kernel_size=3, padding=1),
             nn.ReLU(),
@@ -79,84 +80,58 @@ class FiLMConditioning(ConditioningMethod):
         # Apply FiLM modulation
         return gamma * features + beta
 
-  
 class Block(nn.Module):
-    """
-    A basic building block for the U-Net architecture that processes spatial, temporal, and conditioning information.
-    
-    Args:
-        in_ch (int): Number of input channels
-        out_ch (int): Number of output channels 
-        time_emb_dim (int): Dimension of time embedding
-        cond_emb_dim (int, optional): Dimension of conditioning embedding
-        up (bool): If True, uses transposed convolution for upsampling. If False, uses regular convolution for downsampling
-    """
-    
-    def __init__(self, in_ch, out_ch, time_emb_dim, cond_emb_dim=None, up=False):
+    def __init__(self, in_ch, out_ch, time_emb_dim, conditioning_method=None, up=False):
         super().__init__()
         self.sampling = up
-        self.has_conditioning = cond_emb_dim is not None
+        self.conditioning_method = conditioning_method
         
-        self.conv_1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1) #1st part
+        self.conv_1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
         self.batchnorm_1 = nn.BatchNorm2d(out_ch)  
         
         # Time embedding projection
-        self.time_linear = nn.Linear(time_emb_dim, out_ch) #For time embeddings
-        
-        # Conditioning embedding projection
-        if self.has_conditioning:
-            # For spatial conditioning - project channels to match output channels
-            self.cond_conv = nn.Conv2d(cond_emb_dim, out_ch, kernel_size=1)
+        self.time_linear = nn.Linear(time_emb_dim, out_ch)
 
-        self.conv_2 = nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1) #2nd part
+        self.conv_2 = nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1)
         self.batchnorm_2 = nn.BatchNorm2d(out_ch)
 
         if self.sampling:
-            # use transpose for up 
-            self.conv_3 = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=2, stride=2) #3rd part
+            self.conv_3 = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=2, stride=2)
         else:
             self.conv_3 = nn.Conv2d(out_ch, out_ch, kernel_size=2, stride=2, padding=0)
 
         self.relu = nn.ReLU()
 
-    def forward(self, x, t, cond_emb=None):
+    def forward(self, x, t, cond_encoded=None):
         """
-        Forward pass of the block with time and conditioning embeddings.
+        Forward pass with pluggable conditioning.
         
         Args:
-            x (torch.Tensor): Input feature maps
-            t (torch.Tensor): Time embeddings
-            cond_emb (torch.Tensor, optional): Conditioning embeddings
-            
-        Returns:
-            tuple: (intermediate_features, output_features)
+            x: Input features
+            t: Time embeddings
+            cond_encoded: Pre-encoded conditioning (format depends on conditioning method)
         """
-        x = self.conv_1(x) #1st part
+        x = self.conv_1(x)
         x = self.batchnorm_1(x)
         h = self.relu(x) 
         
         # Add time embeddings
-        t_emb = self.time_linear(t) #Time embeddings
+        t_emb = self.time_linear(t)
         t_emb = t_emb.unsqueeze(-1).unsqueeze(-1)
         t_emb = t_emb.expand(-1, -1, h.shape[2], h.shape[3])
-        h = h + t_emb #Add time to features
+        h = h + t_emb
         
-        # Add conditioning embeddings if available
-        if self.has_conditioning and cond_emb is not None:
-            # Resize spatial conditioning to match current feature map size
-            cond_resized = F.interpolate(cond_emb, size=(h.shape[2], h.shape[3]), mode='bilinear', align_corners=False)
-            # Project conditioning channels to match feature channels
-            c_emb = self.cond_conv(cond_resized)
-            h = h + c_emb  # Add spatial conditioning to features
+        # Apply conditioning if available
+        if self.conditioning_method is not None and cond_encoded is not None:
+            h = self.conditioning_method.apply_conditioning(h, cond_encoded, (h.shape[2], h.shape[3]))
         
-        h = self.conv_2(h) #2nd part
+        h = self.conv_2(h)
         h = self.batchnorm_2(h)
         h = self.relu(h)
         
-        z = self.conv_3(h) #3rd part
+        z = self.conv_3(h)
         
-        return h,z 
-    
+        return h, z
 class SinusoidalPositionEmbeddings(nn.Module):
     """
     Creates sinusoidal positional embeddings for time steps.
@@ -190,24 +165,16 @@ class SinusoidalPositionEmbeddings(nn.Module):
         
         return embeddings
 
-class SimpleUnet(nn.Module):
-    """
-    A simplified variant of the Unet architecture for diffusion models with deep conditioning.
-    Includes time conditioning, deep conditioning, and skip connections.
 
-    Args:
-        in_channels (int): Number of input image channels (only for the target data)
-        cond_channels (int): Number of conditioning channels
-    """
-    def __init__(self, in_channels=5, cond_channels=6):
+class SimpleUnet(nn.Module):
+    def __init__(self, in_channels=5, cond_channels=6, conditioning_type="spatial", **conditioning_kwargs):
         super().__init__()
-        print(f"Using {in_channels} input channels and {cond_channels} conditioning channels for the diffusion model.")
+        print(f"Using {conditioning_type} conditioning with {in_channels} input channels and {cond_channels} conditioning channels")
         
-        down_channels = (128, 256, 512)  # Limited the downsampling stages
+        down_channels = (128, 256, 512)
         up_channels = (512, 256, 128)
-        out_dim = 5  # Output only the 5 denoised channels
+        out_dim = 5
         time_emb_dim = 256
-        cond_emb_dim = 128  # Conditioning embedding dimension
 
         # Time embedding layers
         self.time_mlp = nn.Sequential(
@@ -216,85 +183,98 @@ class SimpleUnet(nn.Module):
             nn.ReLU()
         )
         
-        # Conditioning encoder - preserves spatial information
-        self.cond_encoder = nn.Sequential(
-            nn.Conv2d(cond_channels, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, cond_emb_dim, kernel_size=1),  # Point-wise conv to get desired channels
-            # Remove AdaptiveAvgPool2d - preserve spatial dimensions!
+        # Create conditioning method based on type
+        self.conditioning_type = conditioning_type
+        conditioning_methods = {
+            "spatial": SpatialConditioning,
+            "film": FiLMConditioning,
+        }
+        
+        if conditioning_type not in conditioning_methods:
+            raise ValueError(f"Unknown conditioning type: {conditioning_type}")
+        
+        # Create conditioning instances for each resolution level with correct channel matching
+        self.conditioning_methods = nn.ModuleDict()
+        
+        # Downsampling blocks: condition on output channels of each block
+        for i in range(len(down_channels) - 1):
+            out_channels = down_channels[i + 1]  # Output channels of this downsampling block
+            self.conditioning_methods[f"down_{i}"] = conditioning_methods[conditioning_type](
+                cond_channels, out_channels, **conditioning_kwargs
+            )
+            
+        # Bottleneck: condition on bottleneck channels
+        self.conditioning_methods["bottleneck"] = conditioning_methods[conditioning_type](
+            cond_channels, down_channels[-1], **conditioning_kwargs
         )
         
-        # Initial projection (only for target data, no conditioning concatenation)
-        self.conv_0 = nn.Conv2d(in_channels, down_channels[0], kernel_size=3, padding=1) #Initial projection
+        # Upsampling blocks: condition on output channels of each block
+        for i in range(len(up_channels) - 1):
+            out_channels = up_channels[i + 1]  # Output channels of this upsampling block
+            self.conditioning_methods[f"up_{i}"] = conditioning_methods[conditioning_type](
+                cond_channels, out_channels, **conditioning_kwargs
+            )
+        
+        # Initial projection
+        self.conv_0 = nn.Conv2d(in_channels, down_channels[0], kernel_size=3, padding=1)
 
-        # Downsampling with conditioning support
-        self.downsampling = nn.ModuleList() #Downsampling part
-        for out_chn in range(len(down_channels) - 1):
-            block = Block(down_channels[out_chn], down_channels[out_chn + 1], time_emb_dim, cond_emb_dim, up=False)
+        # Downsampling blocks
+        self.downsampling = nn.ModuleList()
+        for i in range(len(down_channels) - 1):
+            conditioning_method = self.conditioning_methods[f"down_{i}"]
+            block = Block(down_channels[i], down_channels[i + 1], time_emb_dim, conditioning_method, up=False)
             self.downsampling.append(block)
             
-        # Bottleneck with conditioning
-        self.bottleneck = Block(down_channels[-1], down_channels[-1], time_emb_dim, cond_emb_dim, up=False) # Bottleneck bloc
+        # Bottleneck
+        bottleneck_conditioning = self.conditioning_methods["bottleneck"]
+        self.bottleneck = Block(down_channels[-1], down_channels[-1], time_emb_dim, bottleneck_conditioning, up=False)
 
-        # Upsampling with conditioning support
-        self.upsampling = nn.ModuleList() #Upsampling part
+        # Upsampling blocks
+        self.upsampling = nn.ModuleList()
         for i in range(len(up_channels) - 1):
-            self.upsampling.append(Block(up_channels[i] + down_channels[-i-1], up_channels[i+1], time_emb_dim, cond_emb_dim, up=True))
+            conditioning_method = self.conditioning_methods[f"up_{i}"]
+            self.upsampling.append(Block(up_channels[i] + down_channels[-i-1], up_channels[i+1], time_emb_dim, conditioning_method, up=True))
         
-        self.output_proj = nn.Conv2d(up_channels[-1], out_dim, kernel_size=3, padding=1) #Need to projeco
+        self.output_proj = nn.Conv2d(up_channels[-1], out_dim, kernel_size=3, padding=1)
 
     def forward(self, x, timestep, cond):
-        """
-        Forward pass of the U-Net with deep conditioning.
-
-        Args:
-            x (torch.Tensor): Input tensor of shape (batch_size, 5, height, width) - target data only
-            timestep (torch.Tensor): Current timestep for conditioning
-            cond (torch.Tensor): Conditioning tensor of shape (batch_size, 6, height, width)
-
-        Returns:
-            torch.Tensor: Output tensor of shape (batch_size, 5, height, width)
-        """
+        """Forward pass with conditioning type specified at init."""
         # Get time embeddings
-        t = self.time_mlp(timestep) 
+        t = self.time_mlp(timestep)
         
-        # Encode conditioning to embedding vector
-        cond_emb = None
+        # Encode conditioning once (format depends on conditioning type)
+        cond_encoded_levels = {}
         if cond is not None:
-            cond_emb = self.cond_encoder(cond)
+            for level_name, conditioning_method in self.conditioning_methods.items():
+                cond_encoded_levels[level_name] = conditioning_method.encode_conditioning(cond)
         
-        # Ensure input has correct number of channels (target data only)
-        if x.shape[1] != 5:
-            raise ValueError(f"Input tensor must have 5 channels, got {x.shape[1]} channels instead.")
-        
-        # Initial convolution (no concatenation - conditioning is handled via embeddings)
+        # Initial convolution
         x = self.conv_0(x)
-        
-        # Store intermediate outputs for skip connections
         res = []
 
-        # Downsampling path with conditioning at every level
-        for down in self.downsampling:
-            x, _ = down(x, t, cond_emb)  # Pass conditioning to every block
-            res.append(x)  
+        # Downsampling with level-specific conditioning
+        for i, down in enumerate(self.downsampling):
+            level_cond = cond_encoded_levels.get(f"down_{i}")
+            x, _ = down(x, t, level_cond)
+            res.append(x)
 
-        # Bottleneck with conditioning
-        _, x = self.bottleneck(x, t, cond_emb) 
+        # Bottleneck
+        bottleneck_cond = cond_encoded_levels.get("bottleneck")
+        _, x = self.bottleneck(x, t, bottleneck_cond)
         
-        # Upsampling path with skip connections and conditioning
-        for i in range(len(self.upsampling)): #Upsampling
+        # Upsampling
+        for i in range(len(self.upsampling)):
             if x.shape[-2:] != res[-i-1].shape[-2:]:
                 x = F.interpolate(x, size=res[-i-1].shape[-2:], mode='bilinear', align_corners=False)
             
-            x = torch.cat([x, res[-i-1]], dim=1) #Add the skip-connexions
+            x = torch.cat([x, res[-i-1]], dim=1)
             
-            # Apply upsampling block with conditioning
-            x, _ = self.upsampling[i](x, t, cond_emb)
+            level_cond = cond_encoded_levels.get(f"up_{i}")
+            x, _ = self.upsampling[i](x, t, level_cond)
 
         x = self.output_proj(x)
+        return x
 
-        return x  
-    
 class UnconditionalUnet(nn.Module):
     """
     A simplified variant of the Unet architecture for diffusion models.
@@ -324,14 +304,14 @@ class UnconditionalUnet(nn.Module):
 
         self.downsampling = nn.ModuleList() #Downsampling part
         for out_chn in range(len(down_channels)  - 1):
-            block = Block(down_channels[out_chn], down_channels[out_chn + 1], time_emb_dim, cond_emb_dim=None, up=False)
+            block = Block(down_channels[out_chn], down_channels[out_chn + 1], time_emb_dim, conditioning_method=None, up=False)
             self.downsampling.append(block)
             
-        self.bottleneck = Block(down_channels[-1], down_channels[-1], time_emb_dim, cond_emb_dim=None, up=False) # Bottleneck bloc
+        self.bottleneck = Block(down_channels[-1], down_channels[-1], time_emb_dim, conditioning_method=None, up=False) # Bottleneck bloc
 
         self.upsampling = nn.ModuleList() #Upsampling part
         for i in range(len(up_channels) - 1):
-            self.upsampling.append(Block(up_channels[i] + down_channels[-i-1], up_channels[i+1], time_emb_dim, cond_emb_dim=None, up=True))
+            self.upsampling.append(Block(up_channels[i] + down_channels[-i-1], up_channels[i+1], time_emb_dim, conditioning_method=None, up=True))
         
         
         self.output_proj = nn.Conv2d(up_channels[-1], out_dim, kernel_size=3, padding=1) #Need to projeco
@@ -361,11 +341,11 @@ class UnconditionalUnet(nn.Module):
 
         # Downsampling path
         for down in self.downsampling:
-            x, _ = down(x, t, cond_emb=None)  
+            x, _ = down(x, t, cond_encoded=None)  
             res.append(x)  
 
         # Bottleneck
-        _, x = self.bottleneck(x, t, cond_emb=None) 
+        _, x = self.bottleneck(x, t, cond_encoded=None) 
         
         # Upsampling path with skip connections
         for i in range(len(self.upsampling)): #Upsampling
@@ -374,7 +354,7 @@ class UnconditionalUnet(nn.Module):
             
             x = torch.cat([x, res[-i-1]], dim=1) #Add the skip-connexions
             
-            x, _ = self.upsampling[i](x, t, cond_emb=None)
+            x, _ = self.upsampling[i](x, t, cond_encoded=None)
 
         x = self.output_proj(x)
 

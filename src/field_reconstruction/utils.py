@@ -88,9 +88,9 @@ def create_model(model, nb_channels=2):
         print(nb_channels)
         return Generator(in_channels=nb_channels+1, out_channels=nb_channels), Discriminator(in_channels=2*nb_channels)
     elif model == "diffusion_naive":
-        return SimpleUnet(in_channels=2*nb_channels-1)
+        return SimpleUnet(in_channels=5, cond_channels=6, conditioning_type="film")  # Separate input and conditioning
     elif model == "diffusion_unconditional":
-        return UnconditionalUnet(in_channels=nb_channels-1)
+        return UnconditionalUnet(in_channels=5)  # Target data only
     else:
         raise ValueError(f"Unknown model type: {model}")
 

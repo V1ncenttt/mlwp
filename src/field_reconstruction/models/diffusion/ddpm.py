@@ -1,3 +1,5 @@
+
+
 import torch
 import torch.distributions as dist
 from models.diffusion.noise_schedule import ddpm_schedules
@@ -31,7 +33,7 @@ class DDPM(nn.Module):
 
         # register_buffer allows us to freely access these tensors by name. It helps device placement.
         for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
-            self.register_buffer(k, v.to(device))  # move to device 
+            self.register_buffer(k, v)  # Let PyTorch handle device placement automatically
 
         self.n_T = n_T
         self.criterion = criterion
@@ -54,7 +56,8 @@ class DDPM(nn.Module):
         5. Return the loss between predicted and actual noise
         
         Args:
-            x (torch.Tensor): Input images/data
+            x (torch.Tensor): Input target data (batch_size, 5, height, width)
+            cond (torch.Tensor): Conditioning data (batch_size, 6, height, width)
             t (torch.Tensor, optional): Specific timestep. If None, randomly sampled.
             
         Returns:
@@ -66,22 +69,21 @@ class DDPM(nn.Module):
          
         # Step 1: Sample timestep t if not provided
         if t is None:
-            t = torch.randint(0, self.n_T, (x.shape[0],)).to(device)
+            t = torch.randint(0, self.n_T, (x.shape[0],), device=x.device)
             
-        # Step 2: Sample noise from normal distribution
-        epsilon = self.normal_dist.sample(x.shape).to(device) 
+        # Step 2: Sample noise from normal distribution (only for target data)
+        epsilon = self.normal_dist.sample(x.shape).to(x.device) 
         
         # Step 3: Create noised input x_t using the forward process
         # x_t = √(αbar_t) * x_0 + √(1-αbar_t) * ε
-        sqrtab_t = self.sqrtab[t].view(-1, 1, 1, 1).to(device)
-        sqrtmab_t = self.sqrtmab[t].view(-1, 1, 1, 1).to(device)
+        sqrtab_t = self.sqrtab[t].view(-1, 1, 1, 1)
+        sqrtmab_t = self.sqrtmab[t].view(-1, 1, 1, 1)
         
         x_t = sqrtab_t * x + sqrtmab_t * epsilon
 
-        # Step 4 & 5: Predict noise using eps_model and return loss
-        # Note: timesteps are normalized to [0,1] range for the model
-        
-        predicted_epsilon = self.eps_model(x_t, t / self.n_T, cond)
+        # Step 4 & 5: Predict noise using eps_model with separate inputs
+        # Pass noised target data and clean conditioning separately
+        predicted_epsilon = self.eps_model(x_t, t.float() / self.n_T, cond)
         loss = self.criterion(predicted_epsilon, epsilon)
         
         return loss, epsilon, x_t
@@ -103,11 +105,11 @@ class DDPM(nn.Module):
             torch.Tensor: Generated samples
         """
         # Start from pure noise
-        x_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1)
+        x_i = torch.randn(n_sample, *size, device=device)  # x_T ~ N(0, 1)
     
         # Gradually denoise the samples
         for i in range(self.n_T, t, -1):           
-            t_i  = torch.full((n_sample,), i - 1).to(device) / self.n_T  
+            t_i = torch.full((n_sample,), i - 1, device=device, dtype=torch.float32) / self.n_T  
             epsilon_i = self.eps_model(x_i, t_i, cond) #Use the trained model
             
             x_i = self.oneover_sqrta[i] * (x_i - self.mab_over_sqrtmab[i] * epsilon_i)
@@ -142,7 +144,7 @@ class UncondDDPM(nn.Module):
 
         # register_buffer allows us to freely access these tensors by name. It helps device placement.
         for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
-            self.register_buffer(k, v.to(device))  # move to device 
+            self.register_buffer(k, v)  # Let PyTorch handle device placement automatically
 
         self.n_T = n_T
         self.criterion = criterion
@@ -186,22 +188,22 @@ class UncondDDPM(nn.Module):
          
         # Step 1: Sample timestep t if not provided
         if t is None:
-            t = torch.randint(0, self.n_T, (x.shape[0],)).to(device)
+            t = torch.randint(0, self.n_T, (x.shape[0],), device=x.device)
             
         # Step 2: Sample noise from normal distribution
-        epsilon = self.normal_dist.sample(x.shape).to(device) 
+        epsilon = self.normal_dist.sample(x.shape).to(x.device) 
         
         # Step 3: Create noised input x_t using the forward process
         # x_t = √(αbar_t) * x_0 + √(1-αbar_t) * ε
-        sqrtab_t = self.sqrtab[t].view(-1, 1, 1, 1).to(device)
-        sqrtmab_t = self.sqrtmab[t].view(-1, 1, 1, 1).to(device)
+        sqrtab_t = self.sqrtab[t].view(-1, 1, 1, 1)
+        sqrtmab_t = self.sqrtmab[t].view(-1, 1, 1, 1)
         
         x_t = sqrtab_t * x + sqrtmab_t * epsilon
 
         # Step 4 & 5: Predict noise using eps_model and return loss
         # Note: timesteps are normalized to [0,1] range for the model
 
-        predicted_epsilon = self.eps_model(x_t, t / self.n_T)
+        predicted_epsilon = self.eps_model(x_t, t.float() / self.n_T)
         loss = self.criterion(predicted_epsilon, epsilon)
         
         return loss, epsilon, x_t
@@ -223,11 +225,11 @@ class UncondDDPM(nn.Module):
             torch.Tensor: Generated samples
         """
         # Start from pure noise
-        x_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1)
+        x_i = torch.randn(n_sample, *size, device=device)  # x_T ~ N(0, 1)
     
         # Gradually denoise the samples
         for i in range(self.n_T, t, -1):           
-            t_i  = torch.full((n_sample,), i - 1).to(device) / self.n_T  
+            t_i = torch.full((n_sample,), i - 1, device=device, dtype=torch.float32) / self.n_T  
             epsilon_i = self.eps_model(x_i, t_i) #Use the trained model
             
             x_i = self.oneover_sqrta[i] * (x_i - self.mab_over_sqrtmab[i] * epsilon_i)
@@ -263,7 +265,7 @@ class DDIM(nn.Module):
 
         # register_buffer allows us to freely access these tensors by name. It helps device placement.
         for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
-            self.register_buffer(k, v.to(device))  # move to device 
+            self.register_buffer(k, v)  # Let PyTorch handle device placement automatically
 
         self.n_T = n_T
         self.criterion = criterion
@@ -285,8 +287,8 @@ class DDIM(nn.Module):
         5. Return the loss between predicted and actual noise
         
         Args:
-            x (torch.Tensor): Input images/data
-            cond (torch.Tensor): Conditioning tensor
+            x (torch.Tensor): Input target data (batch_size, 5, height, width)
+            cond (torch.Tensor): Conditioning data (batch_size, 6, height, width)
             t (torch.Tensor, optional): Specific timestep. If None, randomly sampled.
             
         Returns:
@@ -298,22 +300,21 @@ class DDIM(nn.Module):
          
         # Step 1: Sample timestep t if not provided
         if t is None:
-            t = torch.randint(0, self.n_T, (x.shape[0],)).to(device)
+            t = torch.randint(0, self.n_T, (x.shape[0],), device=x.device)
             
-        # Step 2: Sample noise from normal distribution
-        epsilon = self.normal_dist.sample(x.shape).to(device) 
+        # Step 2: Sample noise from normal distribution (only for target data)
+        epsilon = self.normal_dist.sample(x.shape).to(x.device) 
         
         # Step 3: Create noised input x_t using the forward process
         # x_t = √(αbar_t) * x_0 + √(1-αbar_t) * ε
-        sqrtab_t = self.sqrtab[t].view(-1, 1, 1, 1).to(device)
-        sqrtmab_t = self.sqrtmab[t].view(-1, 1, 1, 1).to(device)
+        sqrtab_t = self.sqrtab[t].view(-1, 1, 1, 1)
+        sqrtmab_t = self.sqrtmab[t].view(-1, 1, 1, 1)
         
         x_t = sqrtab_t * x + sqrtmab_t * epsilon
 
-        # Step 4 & 5: Predict noise using eps_model and return loss
-        # Note: timesteps are normalized to [0,1] range for the model
-        
-        predicted_epsilon = self.eps_model(x_t, t / self.n_T, cond)
+        # Step 4 & 5: Predict noise using eps_model with separate inputs
+        # Pass noised target data and clean conditioning separately
+        predicted_epsilon = self.eps_model(x_t, t.float() / self.n_T, cond)
         loss = self.criterion(predicted_epsilon, epsilon)
         
         return loss, epsilon, x_t
@@ -337,46 +338,54 @@ class DDIM(nn.Module):
         Returns:
             torch.Tensor: Generated samples
         """
+        # Ensure conditioning is on correct device
+        cond = cond.to(device)
+        
         # Create a subset of timesteps for faster sampling
         if ddim_steps < self.n_T:
-            # Use uniform spacing for timesteps
-            timesteps = torch.linspace(self.n_T, t, ddim_steps + 1, dtype=torch.long).to(device)
+            # Use uniform spacing for timesteps (reverse order for denoising)
+            timesteps = torch.linspace(self.n_T-1, t, ddim_steps, dtype=torch.long, device=device)
         else:
-            timesteps = torch.arange(self.n_T, t, -1, dtype=torch.long).to(device)
+            timesteps = torch.arange(self.n_T-1, t, -1, dtype=torch.long, device=device)
         
         # Start from pure noise
-        x_i = torch.randn(n_sample, *size).to(device)  # x_T ~ N(0, 1)
+        x_i = torch.randn(n_sample, *size, device=device)  # x_T ~ N(0, 1)
     
         # Gradually denoise the samples using DDIM
-        for i in range(len(timesteps) - 1):
+        for i in range(len(timesteps)):
             t_curr = timesteps[i]
-            t_next = timesteps[i + 1]
+            t_next = timesteps[i + 1] if i + 1 < len(timesteps) else torch.tensor(0, device=device)
             
-            # Current timestep normalized
-            t_i = torch.full((n_sample,), t_curr).to(device) / self.n_T
+            # Current timestep normalized to [0,1]
+            t_i = torch.full((n_sample,), t_curr.float() / self.n_T, device=device)
             
-            # Predict noise
+            # Predict noise using the model
             epsilon_i = self.eps_model(x_i, t_i, cond)
             
-            # Get alpha values for current and next timesteps
-            alpha_bar_t = self.alphabar_t[t_curr].to(device)
-            alpha_bar_t_next = self.alphabar_t[t_next].to(device) if t_next >= 0 else torch.tensor(1.0).to(device)
+            # Get alpha_bar values directly from the schedule
+            alpha_bar_t = self.alphabar_t[t_curr]
+            alpha_bar_t_next = self.alphabar_t[t_next] if t_next > 0 else torch.tensor(1.0, device=device)
             
             # Predict x_0 from current x_t and predicted noise
             sqrt_alpha_bar_t = torch.sqrt(alpha_bar_t)
             sqrt_one_minus_alpha_bar_t = torch.sqrt(1 - alpha_bar_t)
+            
             x_0_pred = (x_i - sqrt_one_minus_alpha_bar_t * epsilon_i) / sqrt_alpha_bar_t
             
-            # Compute direction pointing towards x_t
-            sqrt_alpha_bar_t_next = torch.sqrt(alpha_bar_t_next)
-            sqrt_one_minus_alpha_bar_t_next = torch.sqrt(1 - alpha_bar_t_next)
-            
-            # DDIM update rule
-            x_i = sqrt_alpha_bar_t_next * x_0_pred + sqrt_one_minus_alpha_bar_t_next * epsilon_i
-            
-            # Add stochasticity if eta > 0
-            if eta > 0 and t_next > 0:
-                sigma_t = eta * torch.sqrt((1 - alpha_bar_t_next) / (1 - alpha_bar_t)) * torch.sqrt(1 - alpha_bar_t / alpha_bar_t_next)
-                x_i += sigma_t * torch.randn_like(x_i)
+            # Compute direction pointing towards x_t for next step
+            if t_next > 0:
+                sqrt_alpha_bar_t_next = torch.sqrt(alpha_bar_t_next)
+                sqrt_one_minus_alpha_bar_t_next = torch.sqrt(1 - alpha_bar_t_next)
+                
+                # DDIM update rule: x_{t-1} = sqrt(ᾱ_{t-1}) * x_0_pred + sqrt(1-ᾱ_{t-1}) * ε_t
+                x_i = sqrt_alpha_bar_t_next * x_0_pred + sqrt_one_minus_alpha_bar_t_next * epsilon_i
+                
+                # Add stochasticity if eta > 0 (makes it more like DDPM)
+                if eta > 0:
+                    sigma_t = eta * torch.sqrt((1 - alpha_bar_t_next) / (1 - alpha_bar_t)) * torch.sqrt(1 - alpha_bar_t / alpha_bar_t_next)
+                    x_i += sigma_t * torch.randn_like(x_i)
+            else:
+                # Final step: just return the predicted x_0
+                x_i = x_0_pred
 
         return x_i
