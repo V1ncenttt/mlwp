@@ -1,119 +1,190 @@
-# 🌦️ Comparative Study of Deterministic and Generative Surrogate Models for Numerical Weather Prediction
+# 🌦️ Machine Learning for Weather Field Reconstruction
 
-This repository contains the codebase and experiments for my MSc thesis at Imperial College London. The goal is to compare **deterministic** machine learning models (e.g., CNNs, Transformers) with **probabilistic** generative models (e.g., diffusion models) for weather forecasting, using the [WeatherBench2](https://github.com/weatherbench2) dataset.
+This repository contains the codebase and experiments for my MSc thesis at Imperial College London. The focus is on **field reconstruction** - recovering complete spatial weather fields from sparse sensor observations using machine learning, comparing deterministic and generative approaches on the [WeatherBench2](https://github.com/weatherbench2) dataset.
 
 ---
 
 ## 📌 Project Objectives
 
-- **Prediction Accuracy:** How do deterministic and generative models compare in their forecasting performance?
-- **Robustness to Noise:** Which model types better handle realistic noisy inputs?
-- **Data Sparsity:** Can models maintain performance with sparse observational data?
+- **Field Reconstruction Accuracy:** How well can models reconstruct full weather fields from sparse, irregular sensor data?
+- **Conditioning Methods:** Which conditioning approaches (spatial, FiLM, hybrid) work best for diffusion models?
+- **Model Comparison:** How do deterministic CNN-based models compare to generative diffusion models?
 
 ---
 
-## 🧠 Model Types
-### Field Reconstruction
+## 🧠 Implemented Models
 
-- **Deterministic Models**
-  - ResNet-based CNNs
-  - U-net
-  - Vision Transformers (e.g., ViT (VITAE-SL))
-  - Simple CNNS (Voronoi-CNN)
+### Deterministic Models
+- **Fukami-style CNN** - Deep CNN with Voronoi tessellation preprocessing (adapted from [Fukami et al. 2021](https://www.nature.com/articles/s42256-021-00402-2))
+- **Voronoi-Tesselation UNet** - UNet architecture with voronoï tesselation preprocessing
+- **Voronoï-Tesselation ResNet** - Residual blocks for improved training stability, with voronoï tesselation preprocessing
+- **Variational Autoencoder (VAE)** - Latent space reconstruction approach
 
-- **Probabilistic Models**
-  - Score-based diffusion models (e.g., SDD, SGD)
-  - Spatial-aware diffusion with Voronoi encoding
-  - CWGAN (Conditional Wasserstein GANs)
+### Generative Models
+- **Conditional DDPM/DDIM** - Denoising diffusion models with multiple conditioning methods:
+  - **Spatial Conditioning** - Direct concatenation of sensor mask and sparse field
+  - **FiLM Conditioning** - Feature-wise Linear Modulation 
+  - **Hybrid Conditioning** - Novel approach combining patchification, transformers, and cross-attention (inspired by [Zhuang et al. 2024](https://doi.org/10.1029/2024MS004395))
+- **Conditional Wasserstein GAN (CWGAN)** - Adversarial approach for field reconstruction
+
+### Baselines
+- **Linear/Cubic Interpolation** - Classical scipy-based interpolation methods
+- **Kriging** - Classical geostatistical method
 
 ---
 
 ## 🧪 Dataset
 
-- **WeatherBench2** — A modern benchmark for global data-driven weather prediction.
-- Fields: 2m temperature, 10m wind, mean sea level pressure, etc.
-- Resolutions: 1.4°, 0.25°, 6-hourly timesteps
+- **WeatherBench2** - Modern benchmark for global data-driven weather prediction
+- **Variables**: 2m temperature, 10m wind components (u, v), mean sea level pressure, total column water vapor
+- **Resolution**: 1.4° (64×32 grid), 6-hourly timesteps
+- **Task**: Reconstruct full fields from sparse sensor observations (simulated from regular grid)
 
 ---
 
-## 🧱 Structure
+## 🏗️ Project Structure
 ```bash
-.
-├── data/                # WeatherBench2 loading and preprocessing
-├── plots/            
-└── src/             
-```
+mlwp/
+├── data/                           # WeatherBench2 data and preprocessing
+│   ├── README.md
+│   ├── weatherbench2_5vars_3d.nc  # Raw dataset (5 variables, 3D)
+│   └── weatherbench2_5vars_flat.nc # Preprocessed flat fields
+├── download_data.py                # Data download script
+├── src/
+│   ├── field_reconstruction/       # Main field reconstruction experiments
+│   │   ├── models/                 # Model implementations
+│   │   │   ├── diffusion/          # DDPM/DDIM with conditioning
+│   │   │   │   ├── ddpm.py        # Core diffusion implementation
+│   │   │   │   ├── diffusion_unet.py # UNet with spatial/FiLM/hybrid conditioning
+│   │   │   │   └── noise_schedule.py
+│   │   │   ├── fukami.py          # CNN with Voronoi preprocessing
+│   │   │   ├── vae.py             # Variational autoencoder
+│   │   │   ├── cwgan.py           # Conditional Wasserstein GAN
+│   │   │   └── baseline.py        # Interpolation baselines
+│   │   ├── train.py               # Training script with multi-LR optimization
+│   │   ├── test.py                # Evaluation with FLOP counting
+│   │   ├── main.py                # Experiment orchestration
+│   │   ├── config.yaml            # Configuration file
+│   │   ├── utils.py               # Dataset loading and utilities
+│   │   ├── voronoi.py             # Voronoi tessellation preprocessing
+│   │   └── cluster_job.sh         # HPC cluster job script
+│   └── forecast/                   # Future: multi-step forecasting
+├── plots/                          # Generated visualizations
+└── logs/                           # Training logs and outputs
 
 ---
 
 ## 📊 Evaluation Metrics
 
-- RMSE, MAE, ACC, SSIM
-- Skill score vs climatology
-- Calibration plots for probabilistic outputs
+- **MSE, RMSE, MAE** - Standard reconstruction error metrics
+- **SSIM** - Structural similarity for spatial coherence
+- **Computational Cost** - FLOPs analysis for model efficiency
+- **Visual Assessment** - Qualitative comparison of reconstructed fields
 
 ---
 
-## 🗺️ Field Reconstruction
+## 🔬 Conditioning Methods for Diffusion Models
 
-Field reconstruction is a core task in data-driven weather modeling. It consists in recovering full spatial fields (e.g. temperature, wind) from sparse and irregular observations — as often encountered in real-world meteorological sensor networks.
+A key contribution is the systematic comparison of conditioning approaches for weather field reconstruction:
 
-In this project, we simulate sparse sensor measurements from the WeatherBench2 dataset and compare several methods for reconstructing the full field:
+### Spatial Conditioning (Baseline)
+- Direct concatenation of sparse field + sensor mask with noise input
+- Simple but effective approach
 
-### 🔬 Methods Compared
+### FiLM Conditioning (Feature-wise Linear Modulation)
+- Applies learned scale/shift parameters to UNet features
+- Better separation of content and conditioning information
 
-| Method | Description |
-|--------|-------------|
-| **Fukami-style CNN** | A convolutional neural network trained on **Voronoi-tessellated inputs**, where each sensor region is filled using a Voronoi mask. This architecture is adapted from [Fukami et al.](https://www.nature.com/articles/s42256-021-00402-2). |
-| **Variational Autoencoder (VAE)** | A generative model that learns a low-dimensional latent representation of fields, then performs reconstruction by optimizing in latent space given sparse observations. |
-| **Linear & Cubic Interpolation** | Classical interpolation techniques using `scipy.griddata`, serving as baselines. These are purely geometric and don’t learn from data. |
+### Hybrid Conditioning (Novel)
+- **Patchification**: Converts conditioning field to 8×8 patches
+- **FiLM**: Applies feature-wise modulation to patch embeddings  
+- **Positional Encoding**: Sinusoidal position embeddings for spatial awareness
+- **Transformers**: Self-attention over patch sequences
+- **Cross-Attention**: Attends UNet features to processed patches
+- **Shared Architecture**: Single encoder with level-specific projections for efficiency
 
-Each method takes as input:
-- A 2-channel tensor:
-  - Channel 1: sparse input field (e.g. Voronoi-tessellated or interpolated)
-  - Channel 2: binary sensor mask
-- The goal is to reconstruct the full target field and minimize reconstruction error (e.g. MSE).
-
-### 🧪 Evaluation
-
-We evaluate the methods on random held-out samples using:
-- Mean squared error (MSE)
-- Visual comparisons (ground truth vs. reconstruction)
-- Robustness under varying sparsity levels
-
-You can find visualizations and plots in the `plots/` folder after training.
+### Key Implementation Details
+- **FLOP Analysis**: Computational cost comparison using fvcore library
 
 ---
 
-## 📚 References
+## � Quick Start
 
-- [WeatherBench2: Rasp et al. (2024)](https://doi.org/10.1029/2023MS004019)
-- [Generative Diffusion for Surrogate Modeling: Finn et al. (2024)](https://doi.org/10.1029/2024MS004395)
+### Setup
+```bash
+# Clone repository
+git clone https://github.com/V1ncenttt/mlwp.git
+cd mlwp
+
+# Install dependencies
+pip install -r src/field_reconstruction/requirements.txt
+
+# Download WeatherBench2 subset
+python download_data.py
+```
+
+### Training Models
+```bash
+cd src/field_reconstruction
+
+# Train diffusion model with hybrid conditioning
+python train.py --model ddpm --conditioning hybrid --epochs 100
+
+# Train CNN baseline  
+python train.py --model fukami --epochs 50
+
+# Train VAE
+python train.py --model vae --latent_dim 128 --epochs 75
+```
+
+### Evaluation
+```bash
+# Test trained models with FLOP counting
+python test.py --model ddpm --conditioning hybrid --k 5
+
+# Compare multiple models
+python test.py --compare --models ddpm,fukami,vae
+```
+
+### Configuration
+Edit `config.yaml` to modify:
+- Model architectures and hyperparameters  
+- Dataset parameters (variables, resolution, sparsity)
+- Training settings (batch size, learning rates, schedulers)
 
 ---
 
-## 👤 Supervision
+## � Key References
 
-- **Supervisor:** Dr. Sibo Cheng (Imperial College London/ Institut Polytechnique de Paris)
-- **Collaboration:** Institut polytechnique de Paris (France)
-
----
-
-## 📢 Publication & PhD Opportunity
-
-This thesis is part of a broader research direction aimed at high-impact publication (ICLR, NeurIPS, JAMES, GMD) and may evolve into a PhD depending on outcomes and funding.
+- **WeatherBench2**: [Rasp et al. (2024)](https://doi.org/10.1029/2023MS004019) - Modern weather prediction benchmark
+- **Hybrid Conditioning**: [Zhuang et al. (2024)](https://doi.org/10.1029/2024MS004395) - Generative diffusion for surrogate modeling  
+- **Voronoi CNN**: [Fukami et al. (2021)](https://www.nature.com/articles/s42256-021-00402-2) - CNN-based field reconstruction
+- **DDPM**: [Ho et al. (2020)](https://arxiv.org/abs/2006.11239) - Denoising diffusion probabilistic models
+- **DDIM**: [Song et al. (2021)](https://arxiv.org/abs/2010.02502) - Deterministic sampling for diffusion models
 
 ---
 
-## 🛠 Requirements
+## 🛠️ Requirements
 
 - Python 3.10+
-- PyTorch, xarray, einops, WandB
-- See `requirements.txt` for full setup
+- PyTorch 2.0+  
+- xarray, einops, scipy
+- fvcore (for FLOP counting)
+- wandb (for experiment tracking)
+- See `src/field_reconstruction/requirements.txt` for complete list
+
+---
+
+## � Supervision & Collaboration
+
+- **Supervisor:** Dr. Sibo Cheng (Imperial College London / Institut Polytechnique de Paris)
+- **Institution:** Imperial College London, Department of Earth Science and Engineering
+- **Collaboration:** Institut Polytechnique de Paris (France)
 
 ---
 
 ## 📬 Contact
 
-For questions or collaboration inquiries, feel free to reach out:
+For questions about the implementation or research collaboration:
 - [vincent.lefeuve@imperial.ac.uk](mailto:vincent.lefeuve@imperial.ac.uk)
+- GitHub: [@V1ncenttt](https://github.com/V1ncenttt)
