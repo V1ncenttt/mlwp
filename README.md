@@ -1,4 +1,7 @@
-# 🌦️ Machine Learning for Weather Field Reconstruction
+# 🌦️ A Systematic Comparison of Machine
+Learning Models for Reconstructing
+Atmospheric Fields from Sparse
+Observations
 
 This repository contains the codebase and experiments for my MSc thesis at Imperial College London. The focus is on **field reconstruction** - recovering complete spatial weather fields from sparse sensor observations using machine learning, comparing deterministic and generative approaches on the [WeatherBench2](https://github.com/weatherbench2) dataset.
 
