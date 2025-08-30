@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 
 class FukamiNet(nn.Module):
     def __init__(self, in_channels=2, out_channels=1):
@@ -46,7 +46,7 @@ class ResidualBlock(nn.Module):
 
 
 class FukamiResNet(nn.Module):  # test
-    def __init__(self, in_channels=2, out_channels=1, hidden_channels=48, num_blocks=6):
+    def __init__(self, in_channels=2, out_channels=1, hidden_channels=256, num_blocks=6):
         super(FukamiResNet, self).__init__()
         self.entry = nn.Sequential(
             nn.Conv2d(
@@ -111,3 +111,125 @@ class FukamiUNet(nn.Module):
         x = self.dec1(torch.cat([x, x1], dim=1))
 
         return self.final(x)
+
+class VTUnet(nn.Module):
+    """
+    Deterministic UNet with the same architecture as SimpleUnet but without time conditioning.
+    Direct mapping: 5 VT fields + 6 sensor channels -> 5 reconstructed fields
+    Trained with MSE loss for deterministic field reconstruction.
+    """
+    def __init__(self, in_channels=6, out_channels=5):
+    # 5 VT + 6 sensor = 11 input
+        super().__init__()
+        print(f"Using deterministic UNet with {in_channels} input channels and {out_channels} output channels")
+        
+        # Same architecture as SimpleUnet
+        down_channels = (128, 256, 512)
+        up_channels = (512, 256, 128)
+        out_dim = out_channels
+
+        # Initial projection (same as SimpleUnet conv_0)
+        self.conv_0 = nn.Conv2d(in_channels, down_channels[0], kernel_size=3, padding=1)
+
+        # Downsampling blocks (same as SimpleUnet but no time/conditioning)
+        self.downsampling = nn.ModuleList()
+        for i in range(len(down_channels) - 1):
+            block = DeterministicBlock(down_channels[i], down_channels[i + 1], up=False)
+            self.downsampling.append(block)
+            
+        # Bottleneck (same as SimpleUnet but no time/conditioning)
+        self.bottleneck = DeterministicBlock(down_channels[-1], down_channels[-1], up=False)
+
+        # Upsampling blocks (same as SimpleUnet but no time/conditioning)
+        self.upsampling = nn.ModuleList()
+        for i in range(len(up_channels) - 1):
+            self.upsampling.append(DeterministicBlock(up_channels[i] + down_channels[-i-1], up_channels[i+1], up=True))
+        
+        # Output projection (same as SimpleUnet)
+        self.output_proj = nn.Conv2d(up_channels[-1], out_dim, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        """
+        Forward pass for deterministic reconstruction.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, 11, height, width)
+                             [5 VT fields + 6 sensor channels]
+        
+        Returns:
+            torch.Tensor: Reconstructed fields of shape (batch_size, 5, height, width)
+        """
+        # Initial convolution
+        x = self.conv_0(x)
+        res = []
+
+        # Downsampling path
+        for down in self.downsampling:
+            x, _ = down(x)
+            res.append(x)
+
+        # Bottleneck
+        _, x = self.bottleneck(x)
+        
+        # Upsampling path with skip connections
+        for i in range(len(self.upsampling)):
+            if x.shape[-2:] != res[-i-1].shape[-2:]:
+                x = F.interpolate(x, size=res[-i-1].shape[-2:], mode='bilinear', align_corners=False)
+            
+            x = torch.cat([x, res[-i-1]], dim=1)
+            x, _ = self.upsampling[i](x)
+
+        x = self.output_proj(x)
+        return x
+
+
+class DeterministicBlock(nn.Module):
+    """
+    Block for deterministic UNet - same as Block but without time embeddings and conditioning.
+    """
+    
+    def __init__(self, in_ch, out_ch, up=False):
+        super().__init__()
+        self.sampling = up
+        
+        # Same convolution structure as original Block
+        self.conv_1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
+        self.batchnorm_1 = nn.BatchNorm2d(out_ch)  
+        
+        self.conv_2 = nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1)
+        self.batchnorm_2 = nn.BatchNorm2d(out_ch)
+
+        # Same sampling operations as original Block
+        if self.sampling:
+            self.conv_3 = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=2, stride=2)
+        else:
+            self.conv_3 = nn.Conv2d(out_ch, out_ch, kernel_size=2, stride=2, padding=0)
+
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        """
+        Forward pass without time embeddings or conditioning.
+        
+        Args:
+            x: Input features
+            
+        Returns:
+            h: Features after processing (for skip connections)
+            z: Sampled features (for next level)
+        """
+        x = self.conv_1(x)
+        x = self.batchnorm_1(x)
+        h = self.relu(x) 
+        
+        # No time embeddings or conditioning - just process features
+        h = self.conv_2(h)
+        h = self.batchnorm_2(h)
+        h = self.relu(h)
+        
+        z = self.conv_3(h)
+        
+        return h, z
+        
+        
+    

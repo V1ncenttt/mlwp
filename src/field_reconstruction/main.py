@@ -30,7 +30,7 @@ def get_dataset_mode(model_name):
     """
     Get the dataset mode based on the model name.
     """
-    if model_name in ["fukami", "vae", "fukami_resnet", "fukami_unet"] or "diffusion" in model_name.lower():
+    if model_name in ["fukami", "vae", "fukami_resnet", "fukami_unet", "vt_unet"] or "diffusion" in model_name.lower():
         return "voronoi"
     elif "vitae" in model_name or "cwgan" in model_name:
         return "vitae"
@@ -45,7 +45,7 @@ def check_sparsity_datasets_exist():
     datasets_loc = "../../data/weatherbench2_fieldreco/sparsity/"
     
     # Expected percentages and modes
-    percentages = [0.5, 1, 2, 5, 7.5, 20]
+    percentages = [0.5, 1, 2, 5, 7.5, 20, 30, 50]
     modes = ["voronoi", "vitae"]
     
     # Variable prefix for filename
@@ -174,7 +174,32 @@ def main():
             print("✅ All sparsity datasets already exist. Skipping generation.")
             # If you want to regenerate, uncomment the next line
         
+        rrmses = []
         
+        for sparsity in [0.5, 1, 2, 5, 7.5, 20, 30, 50]:
+            model_type = config["test"]["model_type"]
+            model_path = config["test"]["model_path"]
+            print(f"🧪 Testing model: {model_type}...")
+
+            print(f"📊 Loading test data...")
+            test_loader = load_field_reco_dataloaders(
+                variable_list=variables,
+                batch_size=batch_size,
+                mode="test",
+                percent=sparsity,
+                reco_mode=reco_mode,
+                data_dir="../../data/weatherbench2_fieldreco/sparsity/"
+            )
+            
+            perf = evaluate(model_type, test_loader, model_path, variables, config)
+            rrmses.append(perf["rrmse"])
+            
+            print(f"Sparsity: {sparsity}%, RRMSE: {perf['rrmse']:.4f}")
+        
+        print("\n📊 Sparsity vs RRMSE:")
+        for sparsity, rrmse in zip([0.5, 1, 2, 5, 7.5, 20], rrmses):
+            print(f"Sparsity: {sparsity}%, RRMSE: {rrmse:.4f}")
+
     else:
         print("⚠️ No action specified. Use --train or --test.")
 

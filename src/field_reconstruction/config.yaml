@@ -4,14 +4,6 @@ project: mlwp-thesis-fieldreco
 entity: your-wandb-username  # replace with your wandb user/org name
 
 
-model:
-  type: transformer           # or cnn, diffusion, etc.
-  hidden_dim: 256
-  num_layers: 6
-  dropout: 0.1
-  input_channels: 3          # e.g., T2M, U10, V10
-  output_channels: 1         # e.g., T2M forecast
-
 data:
   dataset: weatherbench2
   root_dir: /path/to/data
@@ -19,7 +11,7 @@ data:
   variables: [t2m, u10, v10]
 
 
-loss: cwgan_gp # Select from mse, mae, vae_elbo, smooth_l1, etc.
+loss: mse # Select from mse, mae, vae_elbo, smooth_l1, etc.
 
 logging:
   log_every: 10
@@ -27,24 +19,24 @@ logging:
   use_wandb: true
 
 split_ratio: 0.8
-model: diffusion_naive
+model: fukami_resnet
 
 percent: 10
-batch_size: 64
+batch_size: 32
 variables: 5vars_2d
 output_dir: ../../data/weatherbench2_fieldreco/
 optimizer: adam
-learning_rate: 0.00005
+learning_rate: 0.001 #0.00005
 weight_decay: 0.01
-epochs: 25
+epochs: 10
 tags: [baseline, transformer, lowres]
 notes: Initial experiment using Transformer on WB2 5.625°
 test:
   test_dataset: 
-  model_path: ddpm_checkpoint_epoch_24.pt
+  model_path: ddpm-sage-moose-of-reward.pth
   model_type: diffusion_naive
 
-injection_mode: first
+#injection_mode: first
 
 
 wandb:

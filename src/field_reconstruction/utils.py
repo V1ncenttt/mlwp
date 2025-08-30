@@ -2,7 +2,7 @@ import numpy as np
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
 import torch
-from models import FukamiNet, FukamiResNet, FukamiUNet, ReconstructionVAE, vitae_lite, vitae_large, vitae_base
+from models import FukamiNet, FukamiResNet, FukamiUNet, ReconstructionVAE, vitae_lite, vitae_large, vitae_base, VTUnet
 import numpy as np
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
@@ -75,6 +75,8 @@ def create_model(model, nb_channels=2):
         return FukamiResNet(in_channels=nb_channels, out_channels=nb_channels-1)
     elif model == "fukami_unet":
         return FukamiUNet(in_channels=nb_channels, out_channels=nb_channels-1)
+    elif model == "vt_unet":
+        return VTUnet(in_channels=nb_channels, out_channels=nb_channels-1)
     elif model == "vitae_lite":
         return vitae_lite(input_size=input_size, in_chans=nb_channels, patch_size=4)
     elif model == "vitae_large":
@@ -88,7 +90,7 @@ def create_model(model, nb_channels=2):
         print(nb_channels)
         return Generator(in_channels=nb_channels+1, out_channels=nb_channels), Discriminator(in_channels=2*nb_channels)
     elif model == "diffusion_naive":
-        return SimpleUnet(in_channels=5, cond_channels=6, conditioning_type="film")  # Separate input and conditioning
+        return SimpleUnet(in_channels=5, cond_channels=6, conditioning_type="spatial")  # Separate input and conditioning
     elif model == "diffusion_unconditional":
         return UnconditionalUnet(in_channels=5)  # Target data only
     else:

@@ -4,7 +4,7 @@ import numpy as np
 from tqdm import tqdm
 from models import FukamiNet, ReconstructionVAE
 from models.diffusion.diffusion_unet import SimpleUnet
-from models.diffusion.ddpm import DDPM
+from models.diffusion.ddpm import DDPM, DDIM
 import matplotlib.pyplot as plt
 from utils import get_device
 from plots_creator import plot_random_reconstruction, plot_l2_error_distributions
@@ -12,8 +12,297 @@ from utils import create_model, get_device
 from scipy.interpolate import griddata
 from skimage.metrics import structural_similarity as ssim
 from pykrige.ok import OrdinaryKriging
+from fvcore.nn import flop_count
 
 from pathlib import Path  # <-- make sure this is imported
+
+# Try to import ptflops with better error reporting
+try:
+    from ptflops import get_model_complexity_info
+    ptflops_available = True
+    print("✅ ptflops imported successfully")
+except ImportError as e:
+    print(f"⚠️ ptflops import failed: {e}")
+    print("⚠️ Install with: pip install ptflops")
+    ptflops_available = False
+    get_model_complexity_info = None
+except Exception as e:
+    print(f"⚠️ ptflops unexpected error: {e}")
+    ptflops_available = False
+    get_model_complexity_info = None
+
+def count_model_flops(model, sample_input, model_type="gan", k=5):
+    """
+    Count FLOPs for one prediction using both fvcore and ptflops for comparison.
+    
+    Args:
+        model: The model to count FLOPs for
+        sample_input: Sample input tensor
+        model_type: Type of model ("gan", "diffusion", etc.)
+        k: Number of ensemble predictions (for diffusion/gan models)
+    
+    Returns:
+        dict: Dictionary with FLOP counts and analysis from both libraries
+    """
+    results = {
+        "fvcore": {"available": flop_count is not None},
+        "ptflops": {"available": ptflops_available},  # Use global variable
+        "ensemble_size": k
+    }
+    
+    print(f"\n🔬 Comparing FLOP counters for {model_type} model:")
+    print(f"📋 fvcore available: {results['fvcore']['available']}")
+    print(f"📋 ptflops available: {results['ptflops']['available']}")
+    
+    try:
+        with torch.no_grad():
+            if "diffusion" in model_type:
+                # For diffusion models, count FLOPs for the sampling process
+                batch_size, channels, H, W = sample_input.shape
+                target_shape = (5, H, W)  # Assuming 5 output channels
+                
+                # Count FLOPs for one denoising step (approximation)
+                noise_sample = torch.randn(1, *target_shape, device=sample_input.device)
+                cond_sample = sample_input[:1]  # Use first sample as conditioning
+                timestep = torch.randint(0, 1000, (1,), device=sample_input.device)
+                
+                # Method 1: fvcore
+                if results["fvcore"]["available"]:
+                    try:
+                        flops_dict, _ = flop_count(
+                            model.eps_model,  # The UNet inside DDIM
+                            (noise_sample, timestep, cond_sample)
+                        )
+                        unet_gflops = sum(flops_dict.values())
+                        unet_flops = unet_gflops * 1e9  # Convert GFLOPs to FLOPs
+                        ddim_steps = 50
+                        
+                        results["fvcore"].update({
+                            "single_step_gflops": unet_gflops,
+                            "total_flops": unet_flops * ddim_steps * k,
+                            "flops_per_prediction": unet_flops * ddim_steps
+                        })
+                        print(f"📊 fvcore: {unet_gflops:.3f} GFLOPs per UNet step")
+                    except Exception as e:
+                        print(f"❌ fvcore failed: {e}")
+                        results["fvcore"]["error"] = str(e)
+                
+                # Method 2: ptflops (approximate for diffusion - harder to measure exact sampling)
+                if results["ptflops"]["available"]:
+                    try:
+                        # Measure just the UNet model
+                        input_shape = (target_shape[0] + cond_sample.shape[1], target_shape[1], target_shape[2])
+                        dummy_input = torch.cat([noise_sample, cond_sample], dim=1)
+                        
+                        # Create a wrapper to handle the timestep input
+                        class UNetWrapper(torch.nn.Module):
+                            def __init__(self, unet):
+                                super().__init__()
+                                self.unet = unet
+                            
+                            def forward(self, x):
+                                noise_part = x[:, :target_shape[0]]
+                                cond_part = x[:, target_shape[0]:]
+                                t = torch.randint(0, 1000, (x.shape[0],), device=x.device)
+                                return self.unet(noise_part, t, cond_part)
+                        
+                        wrapper = UNetWrapper(model.eps_model)
+                        macs, params = get_model_complexity_info(
+                            wrapper, 
+                            input_shape, 
+                            print_per_layer_stat=False,
+                            verbose=False
+                        )
+                        
+                        # Handle case where macs might be a string  
+                        if isinstance(macs, str):
+                            print(f"⚠️ ptflops returned string MACs: {macs}")
+                            import re
+                            numbers = re.findall(r'[\d.]+', macs)
+                            if numbers:
+                                macs = float(numbers[0])
+                            else:
+                                raise ValueError(f"Cannot parse MACs from string: {macs}")
+                        
+                        ptflops_gflops = float(macs) / 1e9
+                        ddim_steps = 50
+                        
+                        results["ptflops"].update({
+                            "single_step_gflops": ptflops_gflops,
+                            "total_flops": ptflops_gflops * 1e9 * ddim_steps * k,
+                            "flops_per_prediction": ptflops_gflops * 1e9 * ddim_steps
+                        })
+                        print(f"📊 ptflops: {ptflops_gflops:.3f} GFLOPs per UNet step")
+                    except Exception as e:
+                        print(f"❌ ptflops failed: {e}")
+                        results["ptflops"]["error"] = str(e)
+                        
+            elif "gan" in model_type:
+                # For GAN models, count FLOPs for generator forward pass
+                sample_for_flops = sample_input[:1]
+                
+                # Method 1: fvcore
+                if results["fvcore"]["available"]:
+                    try:
+                        flops_dict, _ = flop_count(model, (sample_for_flops,))
+                        gen_gflops = sum(flops_dict.values())
+                        
+                        results["fvcore"].update({
+                            "single_forward_gflops": gen_gflops,
+                            "total_flops": gen_gflops * 1e9 * k,
+                            "flops_per_prediction": gen_gflops * 1e9
+                        })
+                        print(f"📊 fvcore: {gen_gflops:.3f} GFLOPs per forward pass")
+                    except Exception as e:
+                        print(f"❌ fvcore failed: {e}")
+                        results["fvcore"]["error"] = str(e)
+                
+                # Method 2: ptflops
+                if results["ptflops"]["available"]:
+                    try:
+                        input_shape = sample_for_flops.shape[1:]
+                        macs, params = get_model_complexity_info(
+                            model, 
+                            input_shape, 
+                            print_per_layer_stat=False,
+                            verbose=False
+                        )
+                        
+                        # Handle case where macs might be a string
+                        if isinstance(macs, str):
+                            print(f"⚠️ ptflops returned string MACs: {macs}")
+                            import re
+                            numbers = re.findall(r'[\d.]+', macs)
+                            if numbers:
+                                macs = float(numbers[0])
+                            else:
+                                raise ValueError(f"Cannot parse MACs from string: {macs}")
+                        
+                        ptflops_gflops = float(macs) / 1e9
+                        
+                        results["ptflops"].update({
+                            "single_forward_gflops": ptflops_gflops,
+                            "total_flops": ptflops_gflops * 1e9 * k,
+                            "flops_per_prediction": ptflops_gflops * 1e9
+                        })
+                        print(f"📊 ptflops: {ptflops_gflops:.3f} GFLOPs per forward pass")
+                    except Exception as e:
+                        print(f"❌ ptflops failed: {e}")
+                        results["ptflops"]["error"] = str(e)
+                        
+            else:
+                # For other models (deterministic), count single forward pass
+                sample_for_flops = sample_input[:1]
+                k = 1  # No ensemble for deterministic models
+                results["ensemble_size"] = k
+                
+                # Method 1: fvcore
+                if results["fvcore"]["available"]:
+                    try:
+                        flops_dict, _ = flop_count(model, (sample_for_flops,))
+                        fvcore_gflops = sum(flops_dict.values())
+                        
+                        results["fvcore"].update({
+                            "single_forward_gflops": fvcore_gflops,
+                            "total_flops": fvcore_gflops * 1e9,
+                            "flops_per_prediction": fvcore_gflops * 1e9
+                        })
+                        print(f"📊 fvcore: {fvcore_gflops:.3f} GFLOPs per forward pass")
+                    except Exception as e:
+                        print(f"❌ fvcore failed: {e}")
+                        results["fvcore"]["error"] = str(e)
+                
+                # Method 2: ptflops
+                if results["ptflops"]["available"]:
+                    try:
+                        print(f"🔍 ptflops debug: input_shape = {sample_for_flops.shape[1:]}")
+                        print(f"🔍 ptflops debug: model type = {type(model).__name__}")
+                        
+                        input_shape = sample_for_flops.shape[1:]
+                        macs, params = get_model_complexity_info(
+                            model, 
+                            input_shape, 
+                            print_per_layer_stat=False,
+                            verbose=False
+                        )
+                        
+                        print(f"🔍 ptflops debug: macs = {macs} (type: {type(macs)})")
+                        print(f"🔍 ptflops debug: params = {params} (type: {type(params)})")
+                        
+                        # Handle case where macs might be a string
+                        if isinstance(macs, str):
+                            print(f"⚠️ ptflops returned string MACs: {macs}")
+                            # Try to extract number from string if possible
+                            import re
+                            numbers = re.findall(r'[\d.]+', macs)
+                            if numbers:
+                                macs = float(numbers[0])
+                                print(f"🔍 Extracted MACs as float: {macs}")
+                            else:
+                                raise ValueError(f"Cannot parse MACs from string: {macs}")
+                        
+                        ptflops_gflops = float(macs) / 1e9
+                        
+                        results["ptflops"].update({
+                            "single_forward_gflops": ptflops_gflops,
+                            "total_flops": ptflops_gflops * 1e9,
+                            "flops_per_prediction": ptflops_gflops * 1e9
+                        })
+                        print(f"📊 ptflops: {ptflops_gflops:.3f} GFLOPs per forward pass")
+                    except Exception as e:
+                        print(f"❌ ptflops failed: {type(e).__name__}: {e}")
+                        import traceback
+                        print(f"🔍 Full traceback:\n{traceback.format_exc()}")
+                        results["ptflops"]["error"] = str(e)
+        
+        # Print comparison summary
+        print(f"\n📋 FLOP Comparison Summary:")
+        if "single_forward_gflops" in results.get("fvcore", {}) and "single_forward_gflops" in results.get("ptflops", {}):
+            fv_flops = results["fvcore"]["single_forward_gflops"]
+            pt_flops = results["ptflops"]["single_forward_gflops"]
+        # Print comparison summary
+        print(f"\n📋 FLOP Comparison Summary:")
+        
+        # Check for different types of FLOP measurements
+        fv_key = None
+        pt_key = None
+        
+        if "single_forward_gflops" in results.get("fvcore", {}):
+            fv_key = "single_forward_gflops"
+        elif "single_step_gflops" in results.get("fvcore", {}):
+            fv_key = "single_step_gflops"
+            
+        if "single_forward_gflops" in results.get("ptflops", {}):
+            pt_key = "single_forward_gflops"
+        elif "single_step_gflops" in results.get("ptflops", {}):
+            pt_key = "single_step_gflops"
+        
+        if fv_key and pt_key:
+            fv_flops = results["fvcore"][fv_key]
+            pt_flops = results["ptflops"][pt_key]
+            ratio = pt_flops / fv_flops if fv_flops > 0 else float('inf')
+            print(f"   • fvcore: {fv_flops:.3f} GFLOPs")
+            print(f"   • ptflops: {pt_flops:.3f} GFLOPs")
+            print(f"   • Ratio (ptflops/fvcore): {ratio:.2f}x")
+        elif fv_key:
+            print(f"   • fvcore: {results['fvcore'][fv_key]:.3f} GFLOPs")
+            print(f"   • ptflops: Not available")
+        elif pt_key:
+            print(f"   • fvcore: Not available")
+            print(f"   • ptflops: {results['ptflops'][pt_key]:.3f} GFLOPs")
+        
+        # For backward compatibility, return the fvcore results in the old format
+        if "flops_per_prediction" in results.get("fvcore", {}):
+            return {
+                "total_flops": results["fvcore"]["total_flops"],
+                "flops_per_prediction": "Error", 
+                "ensemble_size": k,
+                "comparison_results": results
+            }
+        
+    except Exception as e:
+        print(f"⚠️ Error counting FLOPs: {e}")
+        return {"total_flops": "Error", "flops_per_prediction": "Error", "comparison_results": results}
 
 def kriging_interpolation(yx, values, H, W, model='exponential'):
     x = yx[:, 1].astype(np.float64)
@@ -218,24 +507,24 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
         return
     elif "gan" in model_type and 'injection_mode' in config_file and config_file['injection_mode'] == "first":
         print("🟢 Evaluating GAN with random noise injection (1st layer)")
-        evaluate_ensemble_model(
+        return evaluate_ensemble_model(
             model_type=model_type,
             test_loader=test_loader,
             checkpoint_path=checkpoint_path,
             variable_names=variable_names,
             config_file=config_file
         )
-        return
+        
     elif "diffusion" in model_type:
         print("🟢 Evaluating Diffusion model")
-        evaluate_ensemble_model(
+        return evaluate_ensemble_model(
             model_type=model_type,
             test_loader=test_loader,
             checkpoint_path=checkpoint_path,
             variable_names=variable_names,
             config_file=config_file
         )
-        return
+        
        
 
     model = create_model(model_type, nb_channels=nb_channels)
@@ -243,7 +532,22 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
         model = model[0]
     # Insert channel check before loading state dict
     print(f"🟢 Generator input channels: {nb_channels}")
-    print(f"🟢 Generator output channels: {model[-1].final.out_channels if hasattr(model[-1], 'final') else 'Unknown'}")
+    
+    # Check output channels based on model type
+    if hasattr(model, 'final') and hasattr(model.final, 'out_channels'):
+        output_channels = model.final.out_channels
+    elif hasattr(model, 'out_channels'):
+        output_channels = model.out_channels
+    elif isinstance(model, torch.nn.Sequential) and len(model) > 0:
+        last_layer = model[-1]
+        if hasattr(last_layer, 'out_channels'):
+            output_channels = last_layer.out_channels
+        else:
+            output_channels = 'Unknown'
+    else:
+        output_channels = 'Unknown'
+    
+    print(f"🟢 Generator output channels: {output_channels}")
     model = model.to(device)
     checkpoint_path = os.path.join("models/saves", checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
@@ -252,6 +556,18 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
     print(f"✅ Evaluating model on {len(test_loader.dataset)} samples")
     print(f"✅ Model type: {model_type}")
     print(f"✅ Device: {device}")
+
+    # Count FLOPs for one prediction
+    print("🧮 Counting FLOPs...")
+    flop_results = count_model_flops(model, sample_input, model_type, k=1)
+    if (flop_results["total_flops"] != "N/A (fvcore not installed)" and 
+        flop_results["total_flops"] != "Error" and 
+        isinstance(flop_results["total_flops"], (int, float)) and
+        isinstance(flop_results["flops_per_prediction"], (int, float))):
+        print(f"📊 FLOPs per prediction: {flop_results['flops_per_prediction']:,}")
+        print(f"📊 Total FLOPs (single prediction): {flop_results['total_flops']:,}")
+    else:
+        print(f"⚠️ FLOP counting not available: {flop_results['total_flops']}")
 
     rrmse_total, mae_total, ssim_total = [], [], []
     l2_errors = [[] for _ in range(nb_channels)]
@@ -352,6 +668,7 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
         "mae_per_var": mae_total,
         "ssim_per_var": ssim_total,
         "l2_per_var": l2_errors,
+        "flop_results": flop_results,
     }
 
 def check_normalization(tensor, name="Tensor"):
@@ -387,7 +704,7 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
         model = create_model(model_type, nb_channels=nb_channels+1)
         T = 1000  # Number of diffusion steps, can be adjusted
         rn_rn_model = model.to(device)
-        ddpm = DDPM(rn_rn_model, (1e-4, 0.02), T).to(device)
+        ddpm = DDIM(rn_rn_model, (1e-4, 0.02), T).to(device)
         model = ddpm
         
     checkpoint_path = os.path.join("models/saves", checkpoint_path)
@@ -405,10 +722,27 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
     print(f"✅ Model type: {model_type}")
     print(f"✅ Device: {device}")
     
+    # Count FLOPs for ensemble predictions (k=5 by default)
+    print("🧮 Counting FLOPs for ensemble predictions...")
+    flop_results = count_model_flops(model, sample_input, model_type, k=k)
+    if (flop_results["total_flops"] != "N/A (fvcore not installed)" and 
+        flop_results["total_flops"] != "Error" and 
+        isinstance(flop_results["total_flops"], (int, float)) and
+        isinstance(flop_results["flops_per_prediction"], (int, float))):
+        print(f"📊 FLOPs per single prediction: {flop_results['flops_per_prediction']:,}")
+        print(f"📊 Total FLOPs (ensemble of {k}): {flop_results['total_flops']:,}")
+        if "diffusion" in model_type:
+            print(f"📊 Note: Diffusion FLOPs include {50} DDIM sampling steps")
+    else:
+        print(f"⚠️ FLOP counting not available: {flop_results['total_flops']}")
+    
     # Limit to 200 samples for diffusion models to speed up evaluation
-    max_samples = 200 if "diffusion" in model_type else len(test_loader.dataset)
+    max_samples = 500 if "diffusion" in model_type else len(test_loader.dataset)
     if "diffusion" in model_type:
         print(f"⚡ Fast evaluation mode: limiting to {max_samples} samples for diffusion model")
+        if isinstance(model, DDIM):
+            print("⚠️ Using DDIM for sampling, ensure model is compatible with this method")
+            pass #Might set eta and t in the future
     
     rrmse_total, mae_total, ssim_total = [], [], []
     l2_errors = [[] for _ in range(nb_channels)]
@@ -445,7 +779,8 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
                         n_sample=batch_size,
                         size=(nb_channels, H, W),  # Size of the target tensor
                         device=device,
-                        cond=cond  # Pass conditioning tensor
+                        cond=cond,  # Pass conditioning tensor
+                        ddim_steps=50
                     )
                 else:
                     preds = model(inputs)
@@ -512,8 +847,9 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
     save_dir = Path("plots/evaluation")
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    plot_l2_error_distributions(l2_errors_dict, variable_names, model_type, str(save_dir),)
-
+    #plot_l2_error_distributions(l2_errors_dict, variable_names, model_type, str(save_dir),)
+    # TODO: Uncomment and/or add if statement
+    """
     plot_random_reconstruction(
         model=model,
         val_loader=test_loader,
@@ -522,6 +858,8 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
         save_dir=str(save_dir),
         num_samples=7
     )
+    """
+    
     return {
         "rrmse": np.mean(rrmse_total),
         "mae": np.mean(mae_total),
@@ -530,6 +868,7 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
         "mae_per_var": mae_total,
         "ssim_per_var": ssim_total,
         "l2_per_var": l2_errors,
+        "flop_results": flop_results,
     }
 
                 

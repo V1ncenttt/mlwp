@@ -574,12 +574,12 @@ def train_diffusion_model(model, data, model_save_path, config):
     val_loader = data["val_loader"]
 
     # Set T from config or default to 50
-    T = config.get("timesteps", 500)
+    T = config.get("timesteps", 1000)
 
     print("Initializing DDPM model and optimizer...")
-    lr = 2e-3
-    ddpm = DDPM(rn_rn_model, (1e-4, 0.02), T).to(device)
-    optim = torch.optim.Adam(ddpm.parameters(), lr=lr, weight_decay=0.01)
+    lr = 2e-4
+    ddpm = DDPM(rn_rn_model, (1e-4, 0.02), T, cfg_dropout_prob=0.1).to(device)
+    optim = torch.optim.Adam(ddpm.parameters(), lr=lr)
     
     # Add cosine annealing with warm restarts scheduler
     T_0 = max(1, epochs // 4)  # Initial restart period (every 25% of total epochs)
@@ -588,9 +588,9 @@ def train_diffusion_model(model, data, model_save_path, config):
         optim, 
         T_0=T_0, 
         T_mult=T_mult, 
-        eta_min=lr*0.001,
+        eta_min=lr,
     )
-    print(f"📈 Added cosine annealing warm restarts scheduler: lr={lr:.2e} -> eta_min={lr*0.01:.2e}")
+    print(f"📈 Added cosine annealing warm restarts scheduler: lr={lr:.2e} -> eta_min={lr:.2e}")
     print(f"📈 Restart schedule: T_0={T_0}, T_mult={T_mult} (restarts every {T_0}, {T_0*T_mult}, {T_0*T_mult**2}, ... epochs)")
     
     # Log key hyperparameters to W&B
@@ -601,7 +601,7 @@ def train_diffusion_model(model, data, model_save_path, config):
         "sampling":"ddpm",  # Indicate DDPM sampling method
         "timesteps_T": T,
         "batch_size": batch_size,
-        "conditioning": "FiLM",  # Separate conditioning input
+        "conditioning": "hybrid",  # Separate conditioning input
         "optimizer": "Adam",
         "scheduler": "CosineAnnealingWarmRestarts",
         "scheduler_T_0": T_0,

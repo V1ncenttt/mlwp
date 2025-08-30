@@ -26,10 +26,12 @@ class DDPM(nn.Module):
         eps_model: nn.Module,
         betas: Tuple[float, float],
         n_T: int,
-        criterion: nn.Module = nn.MSELoss()
+        criterion: nn.Module = nn.MSELoss(),
+        cfg_dropout_prob: float = 0.1
     ) -> None:
         super(DDPM, self).__init__()
         self.eps_model = eps_model
+        self.cfg_dropout_prob = cfg_dropout_prob
 
         # register_buffer allows us to freely access these tensors by name. It helps device placement.
         for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
@@ -258,15 +260,20 @@ class DDIM(nn.Module):
         eps_model: nn.Module,
         betas: Tuple[float, float],
         n_T: int,
-        criterion: nn.Module = nn.MSELoss()
+        criterion: nn.Module = nn.MSELoss(),
+        cfg_dropout_prob: float = 0.1  # 🆕 CFG dropout probability
     ) -> None:
         super(DDIM, self).__init__()
         self.eps_model = eps_model
+        self.cfg_dropout_prob = cfg_dropout_prob  # 🆕 Store CFG parameters
 
         # register_buffer allows us to freely access these tensors by name. It helps device placement.
         for k, v in ddpm_schedules(betas[0], betas[1], n_T).items():
             self.register_buffer(k, v)  # Let PyTorch handle device placement automatically
 
+        self.eta = 0.0  # Stochasticity parameter for DDIM
+        self.ddim_steps = n_T  # Default to full number of steps
+        
         self.n_T = n_T
         self.criterion = criterion
 
@@ -278,13 +285,7 @@ class DDIM(nn.Module):
     def forward(self, x: torch.Tensor, cond: torch.Tensor, t: torch.Tensor = None) -> torch.Tensor:
         """
         Performs forward diffusion and predicts the noise added at timestep t.
-        
-        This implements Algorithm 1 from the DDPM paper (training is identical to DDPM):
-        1. Sample a random timestep t
-        2. Sample random noise ε
-        3. Create noised input x_t using the noise schedule
-        4. Predict the noise using the model
-        5. Return the loss between predicted and actual noise
+        Now supports Classifier-Free Guidance by randomly dropping conditioning.
         
         Args:
             x (torch.Tensor): Input target data (batch_size, 5, height, width)
@@ -312,19 +313,72 @@ class DDIM(nn.Module):
         
         x_t = sqrtab_t * x + sqrtmab_t * epsilon
 
-        # Step 4 & 5: Predict noise using eps_model with separate inputs
-        # Pass noised target data and clean conditioning separately
-        predicted_epsilon = self.eps_model(x_t, t.float() / self.n_T, cond)
+        # Step 4 & 5: Predict noise using eps_model with CFG dropout during training
+        if self.training and self.cfg_dropout_prob > 0:
+            # Randomly set conditioning to None for some samples  
+            batch_size = cond.shape[0]
+            dropout_mask = torch.rand(batch_size, device=cond.device) < self.cfg_dropout_prob
+            
+            # If we need to handle mixed batches (some with, some without conditioning)
+            if dropout_mask.any() and not dropout_mask.all():
+                # Split batch into conditional and unconditional
+                cond_indices = ~dropout_mask
+                uncond_indices = dropout_mask
+                
+                # Process conditional samples
+                if cond_indices.any():
+                    x_t_cond = x_t[cond_indices]
+                    t_cond = t[cond_indices]
+                    cond_cond = cond[cond_indices]
+                    pred_eps_cond = self.eps_model(x_t_cond, t_cond.float() / self.n_T, cond_cond)
+                
+                # Process unconditional samples  
+                if uncond_indices.any():
+                    x_t_uncond = x_t[uncond_indices]
+                    t_uncond = t[uncond_indices]
+                    pred_eps_uncond = self.eps_model(x_t_uncond, t_uncond.float() / self.n_T, None)
+                
+                # Combine predictions back to original order
+                predicted_epsilon = torch.zeros_like(epsilon)
+                if cond_indices.any():
+                    predicted_epsilon[cond_indices] = pred_eps_cond
+                if uncond_indices.any():
+                    predicted_epsilon[uncond_indices] = pred_eps_uncond
+            else:
+                # All samples have same conditioning status
+                effective_cond = None if dropout_mask.all() else cond
+                predicted_epsilon = self.eps_model(x_t, t.float() / self.n_T, effective_cond)
+        else:
+            # Standard forward pass without CFG dropout
+            predicted_epsilon = self.eps_model(x_t, t.float() / self.n_T, cond)
+        
         loss = self.criterion(predicted_epsilon, epsilon)
         
         return loss, epsilon, x_t
     
-    def sample(self, n_sample: int, size, device, cond: torch.Tensor, t = 0, eta: float = 0.0, ddim_steps: int = 50) -> torch.Tensor:
+    def set_eta(self, eta: float) -> None:
         """
-        Samples new images using the trained diffusion model with DDIM sampling.
+        Sets the stochasticity parameter for DDIM sampling.
         
-        Implements the DDIM sampling algorithm - deterministic sampling for faster generation.
-        When eta=0, sampling is completely deterministic. When eta=1, it reduces to DDPM.
+        Args:
+            eta (float): Stochasticity parameter (0=deterministic, 1=stochastic like DDPM)
+        """
+        self.eta = eta
+        
+    def set_ddim_steps(self, ddim_steps: int) -> None:
+        """
+        Sets the number of DDIM sampling steps.
+        
+        Args:
+            ddim_steps (int): Number of sampling steps (can be much smaller than n_T)
+        """
+        self.ddim_steps = ddim_steps
+        
+    def sample(self, n_sample: int, size, device, cond: torch.Tensor, t = 0, eta: float = 0.0, ddim_steps: int = 50, cfg_scale: float = 7.5) -> torch.Tensor:
+        """
+        Samples new images using the trained diffusion model with DDIM sampling and CFG.
+        
+        Implements the DDIM sampling algorithm with Classifier-Free Guidance for stronger conditioning.
         
         Args:
             n_sample (int): Number of samples to generate
@@ -334,6 +388,7 @@ class DDIM(nn.Module):
             t (int): Starting timestep (default=0)
             eta (float): Stochasticity parameter (0=deterministic, 1=stochastic like DDPM)
             ddim_steps (int): Number of sampling steps (can be much smaller than n_T)
+            cfg_scale (float): CFG guidance scale (1.0=no guidance, >1.0=stronger conditioning)
             
         Returns:
             torch.Tensor: Generated samples
@@ -352,6 +407,7 @@ class DDIM(nn.Module):
         x_i = torch.randn(n_sample, *size, device=device)  # x_T ~ N(0, 1)
     
         # Gradually denoise the samples using DDIM
+        print(len(timesteps))
         for i in range(len(timesteps)):
             t_curr = timesteps[i]
             t_next = timesteps[i + 1] if i + 1 < len(timesteps) else torch.tensor(0, device=device)
@@ -359,8 +415,19 @@ class DDIM(nn.Module):
             # Current timestep normalized to [0,1]
             t_i = torch.full((n_sample,), t_curr.float() / self.n_T, device=device)
             
-            # Predict noise using the model
-            epsilon_i = self.eps_model(x_i, t_i, cond)
+            # 🆕 CFG: Predict noise with classifier-free guidance
+            if cfg_scale > 1.0:
+                # Conditional prediction
+                epsilon_cond = self.eps_model(x_i, t_i, cond)
+                
+                # Unconditional prediction  
+                epsilon_uncond = self.eps_model(x_i, t_i, None)
+                
+                # Apply classifier-free guidance
+                epsilon_i = epsilon_uncond + cfg_scale * (epsilon_cond - epsilon_uncond)
+            else:
+                # No guidance - just conditional
+                epsilon_i = self.eps_model(x_i, t_i, cond)
             
             # Get alpha_bar values directly from the schedule
             alpha_bar_t = self.alphabar_t[t_curr]

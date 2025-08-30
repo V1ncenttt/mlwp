@@ -5,6 +5,7 @@ import torch
 import random
 from scipy.interpolate import griddata
 from pykrige.ok import OrdinaryKriging
+from models.diffusion.ddpm import DDIM, DDPM
 
 def kriging_interpolation(yx, values, H, W, model='exponential'):
     x = yx[:, 1].astype(np.float64)
@@ -199,7 +200,7 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, 
     model_is_interp = model_name == "cubic_interpolation"
     model_is_kriging = model_name == "kriging"
     channel_names =["Temperature (10m)", "U component of Wind (10m)", "V component of Wind (10m)", "Water column vapour", "Sea level pressure"]
-    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if not model_is_interp and not model_is_kriging:
         model.eval()
@@ -243,8 +244,10 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, 
                     interp = kriging_interpolation(yx, values, H, W, model='exponential')
                     pred = interp
                     
+                    
                 else:
                     x_in = x.unsqueeze(0).to(device)
+                    y_in = y.unsqueeze(0).to(device)
                     if model_name == "vae":
                         recon_x, mu, logvar = model(x_in)
                         pred = recon_x.squeeze().cpu().numpy()[ch]
@@ -255,6 +258,11 @@ def plot_random_reconstruction(model, val_loader, device, model_name, save_dir, 
                         #Remove first channel (mask) for GANs
                         x_in = x_in[:, 1:, :, :]
                         pred = model(x_in).squeeze().cpu().numpy()[ch]
+                    elif "diffusion" in model_name:
+                        if isinstance(model, DDIM):
+                            pred = model.sample(n_sample=1,size=(y_in.shape[1], y_in.shape[2], y_in.shape[3]), device=device, cond=x_in, ddim_steps=20).squeeze().cpu().numpy()[ch]
+                        elif isinstance(model, DDPM):
+                            pred = model.sample(n_sample=1,size=(y_in.shape[1], y_in.shape[2], y_in.shape[3]), device=device, cond=x_in).squeeze().cpu().numpy()[ch]
                     else:
                         pred = model(x_in).squeeze().cpu().numpy()[ch]
 
