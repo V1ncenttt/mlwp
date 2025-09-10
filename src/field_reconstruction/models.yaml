@@ -1,0 +1,18 @@
+vitae_large:
+  pth: vitae_large_model_25_0.078834.pth
+  mode: vitae
+vitae_base:
+  pth: vitae_base_model_25_0.093341.pth
+  mode: vitae
+vitae_base:
+  pth: vitae_base_model_25_0.093341.pth
+  mode: vitae
+vt_unet:
+  pth: vt_unet_model_25_0.096430.pth
+  mode: voronoi
+fukami_resnet:
+  pth: fukami_resnet_model_25_0.108817.pth
+  mode: voronoi
+cwgan_gp:
+  pth: generator_model_25_52527011.025120.pth
+  mode: vitae

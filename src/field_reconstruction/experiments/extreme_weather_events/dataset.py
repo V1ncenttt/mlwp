@@ -11,7 +11,7 @@ def build_paths(variables, percent: float, mode: str, nvars: int, root: str) -> 
     in_path  = os.path.join(root, f"{base}_test.pt")
     out_dir  = os.path.join(root, "extremes")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"{base}_test_extremes.pt")
+    out_path = os.path.join(out_dir, f"{base}_test.pt")
     return in_path, out_path
 
 def slice_time(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:

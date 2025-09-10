@@ -5,7 +5,7 @@ import torch.distributions as dist
 from models.diffusion.noise_schedule import ddpm_schedules
 import torch.nn as nn
 from typing import Tuple
-
+import math
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")   
 
 class DDPM(nn.Module):
@@ -373,86 +373,82 @@ class DDIM(nn.Module):
             ddim_steps (int): Number of sampling steps (can be much smaller than n_T)
         """
         self.ddim_steps = ddim_steps
-        
-    def sample(self, n_sample: int, size, device, cond: torch.Tensor, t = 0, eta: float = 0.0, ddim_steps: int = 50, cfg_scale: float = 7.5) -> torch.Tensor:
-        """
-        Samples new images using the trained diffusion model with DDIM sampling and CFG.
-        
-        Implements the DDIM sampling algorithm with Classifier-Free Guidance for stronger conditioning.
-        
-        Args:
-            n_sample (int): Number of samples to generate
-            size (tuple): Size of each sample
-            device: Device to generate samples on
-            cond (torch.Tensor): Conditioning tensor
-            t (int): Starting timestep (default=0)
-            eta (float): Stochasticity parameter (0=deterministic, 1=stochastic like DDPM)
-            ddim_steps (int): Number of sampling steps (can be much smaller than n_T)
-            cfg_scale (float): CFG guidance scale (1.0=no guidance, >1.0=stronger conditioning)
-            
-        Returns:
-            torch.Tensor: Generated samples
-        """
-        # Ensure conditioning is on correct device
-        cond = cond.to(device)
-        
-        # Create a subset of timesteps for faster sampling
-        if ddim_steps < self.n_T:
-            # Use uniform spacing for timesteps (reverse order for denoising)
-            timesteps = torch.linspace(self.n_T-1, t, ddim_steps, dtype=torch.long, device=device)
-        else:
-            timesteps = torch.arange(self.n_T-1, t, -1, dtype=torch.long, device=device)
-        
-        # Start from pure noise
-        x_i = torch.randn(n_sample, *size, device=device)  # x_T ~ N(0, 1)
     
-        # Gradually denoise the samples using DDIM
-        print(len(timesteps))
-        for i in range(len(timesteps)):
-            t_curr = timesteps[i]
-            t_next = timesteps[i + 1] if i + 1 < len(timesteps) else torch.tensor(0, device=device)
+    def get_optimized_timesteps(self, n_T, ddim_steps, schedule='linear', min_t=10):
+        """Safe timestep scheduling with minimum timestep protection"""
+        
+        if schedule == 'cosine':
+            # SAFE cosine schedule - avoid very small timesteps
+            steps = torch.linspace(0, 1, ddim_steps + 1)[1:]  # Skip t=0, range (0, 1]
+            steps = (torch.cos(steps * math.pi) + 1) / 2  # Maps to [~0.85, 0.0] → we want to avoid 0.0
+            steps = steps * (n_T - min_t) + min_t  # Scale to [min_t, n_T-1]
             
-            # Current timestep normalized to [0,1]
-            t_i = torch.full((n_sample,), t_curr.float() / self.n_T, device=device)
+        elif schedule == 'sqrt':
+            # SAFE square root schedule
+            steps = torch.linspace(0, 1, ddim_steps + 1)[1:]  # Skip t=0
+            steps = torch.sqrt(steps) * (n_T - min_t) + min_t  # [min_t, n_T-1]
             
-            # 🆕 CFG: Predict noise with classifier-free guidance
-            if cfg_scale > 1.0:
-                # Conditional prediction
-                epsilon_cond = self.eps_model(x_i, t_i, cond)
-                
-                # Unconditional prediction  
-                epsilon_uncond = self.eps_model(x_i, t_i, None)
-                
-                # Apply classifier-free guidance
-                epsilon_i = epsilon_uncond + cfg_scale * (epsilon_cond - epsilon_uncond)
-            else:
-                # No guidance - just conditional
-                epsilon_i = self.eps_model(x_i, t_i, cond)
-            
-            # Get alpha_bar values directly from the schedule
-            alpha_bar_t = self.alphabar_t[t_curr]
-            alpha_bar_t_next = self.alphabar_t[t_next] if t_next > 0 else torch.tensor(1.0, device=device)
-            
-            # Predict x_0 from current x_t and predicted noise
-            sqrt_alpha_bar_t = torch.sqrt(alpha_bar_t)
-            sqrt_one_minus_alpha_bar_t = torch.sqrt(1 - alpha_bar_t)
-            
-            x_0_pred = (x_i - sqrt_one_minus_alpha_bar_t * epsilon_i) / sqrt_alpha_bar_t
-            
-            # Compute direction pointing towards x_t for next step
-            if t_next > 0:
-                sqrt_alpha_bar_t_next = torch.sqrt(alpha_bar_t_next)
-                sqrt_one_minus_alpha_bar_t_next = torch.sqrt(1 - alpha_bar_t_next)
-                
-                # DDIM update rule: x_{t-1} = sqrt(ᾱ_{t-1}) * x_0_pred + sqrt(1-ᾱ_{t-1}) * ε_t
-                x_i = sqrt_alpha_bar_t_next * x_0_pred + sqrt_one_minus_alpha_bar_t_next * epsilon_i
-                
-                # Add stochasticity if eta > 0 (makes it more like DDPM)
-                if eta > 0:
-                    sigma_t = eta * torch.sqrt((1 - alpha_bar_t_next) / (1 - alpha_bar_t)) * torch.sqrt(1 - alpha_bar_t / alpha_bar_t_next)
-                    x_i += sigma_t * torch.randn_like(x_i)
-            else:
-                # Final step: just return the predicted x_0
-                x_i = x_0_pred
+        else:  # linear (default) - always safe
+            steps = torch.linspace(min_t, n_T-1, ddim_steps)  # Start from min_t
+        
+        steps = torch.round(steps).long()
+        steps = torch.unique_consecutive(steps)
+        
+        # Final safety check - ensure no timesteps below min_t
+        steps = steps[steps >= min_t]
+        
+        return steps.flip(0)  # Descending order
 
-        return x_i
+
+    def sample(self, n_sample: int, size, device, cond: torch.Tensor, 
+           t: int = 0, eta: float = 0.0, ddim_steps: int = 100, 
+           cfg_scale: float = 1, noise_aware_cfg: bool = False) -> torch.Tensor:
+        cond = cond.to(device)
+
+        # robust, unique, descending timestep schedule
+        ts = torch.linspace(0, self.n_T - 1, steps=ddim_steps, device=device)
+        # Usage in sample():
+        #timesteps = self.get_optimized_timesteps(self.n_T, ddim_steps, schedule='sqrt')
+        timesteps = torch.round(ts).long().flip(0)
+        timesteps = torch.unique_consecutive(timesteps)
+        print("Sampling with " + str(ddim_steps) + " steps") 
+        x = torch.randn(n_sample, *size, device=device)
+
+        for idx, t_curr in enumerate(timesteps):
+            t_prev = timesteps[idx + 1] if idx + 1 < len(timesteps) else torch.tensor(-1, device=device)
+            a_t = self.alphabar_t[t_curr]                       # scalar tensor
+            a_prev = torch.tensor(1.0, device=device) if t_prev.item() < 0 else self.alphabar_t[t_prev]
+
+            sqrt_a_t = torch.sqrt(a_t)
+            sqrt_1ma_t = torch.sqrt(1 - a_t)
+
+            # normalized t input
+            t_in = torch.full((n_sample,), float(t_curr.item()) / self.n_T, device=device)
+
+            # classifier-free guidance (use small scales for fields)
+            eps_u = self.eps_model(x, t_in, None)
+            if cfg_scale > 1e-6:
+                eps_c = self.eps_model(x, t_in, cond)
+                if noise_aware_cfg:
+                    # see §2 for a better schedule
+                    w_t = cfg_scale * (1.0 + (1 - a_t))  # Signal-to-noise ratio
+                else:
+                    w_t = torch.tensor(cfg_scale, device=device)
+                eps_hat = eps_u + w_t * (eps_c - eps_u)
+            else:
+                eps_hat = eps_u
+
+            # predict x0
+            x0_hat = (x - sqrt_1ma_t * eps_hat) / sqrt_a_t
+
+            # DDIM update with correct variance split
+            # sigma_t = 0 for deterministic (eta=0)
+            sigma_t = eta * torch.sqrt((1 - a_prev) / (1 - a_t)) * torch.sqrt(1 - a_t / a_prev)
+            # direction term keeps the remaining variance (minus sigma_t^2)
+            dir_coeff = torch.sqrt(torch.clamp(1 - a_prev - sigma_t**2, min=0.0))
+
+            x = torch.sqrt(a_prev) * x0_hat + dir_coeff * eps_hat
+            if eta > 0:
+                x = x + sigma_t * torch.randn_like(x)
+
+        return x

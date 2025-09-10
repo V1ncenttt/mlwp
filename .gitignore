@@ -182,3 +182,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+field_reconstruction/wandb/
+src/field_reconstruction/wandb/
+src/field_reconstruction/wandb/*
+wandb/*

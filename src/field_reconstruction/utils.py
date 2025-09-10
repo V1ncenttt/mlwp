@@ -7,6 +7,7 @@ import numpy as np
 from scipy.spatial import Voronoi
 from skimage.draw import polygon
 from models.diffusion.diffusion_unet import SimpleUnet, UnconditionalUnet
+from models.cwgan import Generator, Discriminator
 
 def voronoi_tesselate(sensor_coords, sensor_values, grid_shape):
     """
@@ -86,9 +87,8 @@ def create_model(model, nb_channels=2):
     elif model == "vae":
         return ReconstructionVAE(in_channels=nb_channels, out_channels=nb_channels-1, latent_dim=128)
     elif model == "cwgan_gp":
-        from models.cwgan import Generator, Discriminator
         print(nb_channels)
-        return Generator(in_channels=nb_channels+1, out_channels=nb_channels), Discriminator(in_channels=2*nb_channels)
+        return Generator(in_channels=nb_channels, out_channels=nb_channels-1), Discriminator(in_channels=2*nb_channels)
     elif model == "diffusion_naive":
         return SimpleUnet(in_channels=5, cond_channels=6, conditioning_type="spatial")  # Separate input and conditioning
     elif model == "diffusion_unconditional":

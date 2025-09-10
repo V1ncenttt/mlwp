@@ -1,32 +1,34 @@
-from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
 @dataclass(frozen=True)
 class ExtremeConfig:
-    """Thresholds & options for snapshot-only extreme detection."""
-    # heat/cold (z-score on 2m temperature, per-grid climatology)
-    heat_z: float = 2.0
-    cold_z: float = -2.0
+    # Heat/cold (per-grid z on T2m)
+    heat_z: float = 2.5
+    cold_z: float = -2.5
+    heat_min_frac: float = 0.05      # ≥5% of grid hot to flag frame
+    cold_min_frac: float = 0.05
 
-    # tropical cyclone (TC) snapshot proxy
-    gale_ms: float = 17.0           # |V| threshold (m/s)
+    # Bands
     tc_lat_abs_max: float = 30.0
-    p_zeta: float = 0.99            # vorticity percentile
-    p_lap: float = 0.99             # Laplacian(MSLP) percentile
-
-    # extratropical cyclone (ETC) proxy
     etc_lat_abs_min: float = 25.0
-    p_gradT: float = 0.99           # |∇T| percentile
 
-    # atmospheric river (AR) proxy (moisture flux ≈ TCWV * |V|)
-    p_mqf: float = 0.97
+    # GLOBAL (dataset-wide) percentiles for snapshot features
+    q_vmag: float  = 0.995           # |V| global threshold
+    q_zeta: float  = 0.999           # vorticity global threshold
+    q_lap: float   = 0.999           # Laplacian(MSLP)
+    q_gradT: float = 0.999           # |∇T|
+    q_mqf: float   = 0.995           # TCWV*|V|
+
+    # Area gating (as fraction of grid) – avoidsa “salt-and-pepper”
+    tc_min_frac: float  = 0.002      # ~3–5 cells on your grid
+    tc_max_frac: float  = 0.05       # compact systems
+    etc_min_frac: float = 0.01       # ETCs are broader
+    ar_min_frac: float  = 0.02
+    ar_max_frac: float  = 0.25
 
     # batching
     batch_size: int = 64
 
-    # Y channel order (fixed by your pipeline):
-    # 0: 2m_temperature, 1: 10m_u, 2: 10m_v, 3: mslp, 4: tcwv
-    y_channel_order: Tuple[str, str, str, str, str] = (
-        "t2m", "u10", "v10", "mslp", "tcwv"
-    )
+    # Y channel order: (T2m, U10, V10, MSLP, TCWV)
+    y_channel_order: Tuple[str, str, str, str, str] = ("t2m", "u10", "v10", "mslp", "tcwv")

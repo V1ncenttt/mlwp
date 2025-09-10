@@ -47,6 +47,9 @@ class ResidualBlock(nn.Module):
 
 class FukamiResNet(nn.Module):  # test
     def __init__(self, in_channels=2, out_channels=1, hidden_channels=256, num_blocks=6):
+        """
+        Also Called VT-Unet.
+        """
         super(FukamiResNet, self).__init__()
         self.entry = nn.Sequential(
             nn.Conv2d(

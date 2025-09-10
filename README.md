@@ -15,10 +15,11 @@ This repository contains the codebase and experiments for my MSc thesis at Imper
 ## 🧠 Implemented Models
 
 ### Deterministic Models
-- **Fukami-style CNN** - Deep CNN with Voronoi tessellation preprocessing (adapted from [Fukami et al. 2021](https://www.nature.com/articles/s42256-021-00402-2))
+- **VCNN** - Deep CNN with Voronoi tessellation preprocessing (adapted from [Fukami et al. 2021](https://www.nature.com/articles/s42256-021-00402-2))
 - **Voronoi-Tesselation UNet** - UNet architecture with voronoï tesselation preprocessing
 - **Voronoï-Tesselation ResNet** - Residual blocks for improved training stability, with voronoï tesselation preprocessing
 - **Variational Autoencoder (VAE)** - Latent space reconstruction approach
+- **ViTAE-SL** - Transformer-based models with an autoencoder architecture
 
 ### Generative Models
 - **Conditional DDPM/DDIM** - Denoising diffusion models with multiple conditioning methods:
@@ -83,30 +84,6 @@ mlwp/
 
 ---
 
-## 🔬 Conditioning Methods for Diffusion Models
-
-A key contribution is the systematic comparison of conditioning approaches for weather field reconstruction:
-
-### Spatial Conditioning (Baseline)
-- Direct concatenation of sparse field + sensor mask with noise input
-- Simple but effective approach
-
-### FiLM Conditioning (Feature-wise Linear Modulation)
-- Applies learned scale/shift parameters to UNet features
-- Better separation of content and conditioning information
-
-### Hybrid Conditioning (Novel)
-- **Patchification**: Converts conditioning field to 8×8 patches
-- **FiLM**: Applies feature-wise modulation to patch embeddings  
-- **Positional Encoding**: Sinusoidal position embeddings for spatial awareness
-- **Transformers**: Self-attention over patch sequences
-- **Cross-Attention**: Attends UNet features to processed patches
-- **Shared Architecture**: Single encoder with level-specific projections for efficiency
-
-### Key Implementation Details
-- **FLOP Analysis**: Computational cost comparison using fvcore library
-
----
 
 ## � Quick Start
 
@@ -116,36 +93,28 @@ A key contribution is the systematic comparison of conditioning approaches for w
 git clone https://github.com/V1ncenttt/mlwp.git
 cd mlwp
 
-# Install dependencies
-pip install -r src/field_reconstruction/requirements.txt
 
 # Download WeatherBench2 subset
 python download_data.py
 ```
 
-### Training Models
+### How to use?
 ```bash
 cd src/field_reconstruction
 
-# Train diffusion model with hybrid conditioning
-python train.py --model ddpm --conditioning hybrid --epochs 100
+# Train a model
+python main.py --train
 
-# Train CNN baseline  
-python train.py --model fukami --epochs 50
+# Test a model (10% of the space observed)
+python main.py --test
 
-# Train VAE
-python train.py --model vae --latent_dim 128 --epochs 75
+# Test your model on data with different levels of sparsity
+python main.py --sparsity
+
+# Test your model on extreme weather events
+python main.py --extreme
 ```
-
-### Evaluation
-```bash
-# Test trained models with FLOP counting
-python test.py --model ddpm --conditioning hybrid --k 5
-
-# Compare multiple models
-python test.py --compare --models ddpm,fukami,vae
-```
-
+To change the model and the hyperparameters, edit config.yaml. 
 ### Configuration
 Edit `config.yaml` to modify:
 - Model architectures and hyperparameters  
@@ -171,7 +140,6 @@ Edit `config.yaml` to modify:
 - xarray, einops, scipy
 - fvcore (for FLOP counting)
 - wandb (for experiment tracking)
-- See `src/field_reconstruction/requirements.txt` for complete list
 
 ---
 

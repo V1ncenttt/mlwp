@@ -17,6 +17,8 @@ from train import train
 from test import evaluate
 from prepare_data import create_and_save_field_reco_dataset, load_field_reco_dataloaders
 from experiments.sparsity.sparsity_datasets_generator import generate_sparsity_datasets
+from experiments.extreme_weather_events import create_extreme_test_dataset, ExtremeConfig
+
 def get_config_params():
     """
     Load configuration parameters from a YAML file.
@@ -93,7 +95,9 @@ def main():
     parser.add_argument("--test", action="store_true", help="Test the model")
     parser.add_argument("--num_sensors", type=int, default=100, help="Number of sensors to sample")
     parser.add_argument("--model_path", type=str, default=None, help="Path to the trained model/save path")
-    parser.add_argument("--sparsity", action="store_true", help="Generate sparsity datasets")
+    parser.add_argument("--sparsity", action="store_true", help="Generate sparsity datasets and/or test your model on them")
+    parser.add_argument("--extreme", action="store_true", help="Generate extreme weather events dataset and/or test your model on them")
+    parser.add_argument("-- plot", action="store_true", help="Generate a plot of all of the models reconstruction on 5 random inputs")
     args = parser.parse_args()
 
     config = get_config_params()
@@ -180,6 +184,7 @@ def main():
             model_type = config["test"]["model_type"]
             model_path = config["test"]["model_path"]
             print(f"🧪 Testing model: {model_type}...")
+            print("Sparsity level: " + str(sparsity))
 
             print(f"📊 Loading test data...")
             test_loader = load_field_reco_dataloaders(
@@ -199,6 +204,54 @@ def main():
         print("\n📊 Sparsity vs RRMSE:")
         for sparsity, rrmse in zip([0.5, 1, 2, 5, 7.5, 20], rrmses):
             print(f"Sparsity: {sparsity}%, RRMSE: {rrmse:.4f}")
+
+    elif args.extreme:
+        # generate datased here
+        print("🌪️ Building extreme-snapshots test set (snapshot-only)…")
+        
+
+        cfg = ExtremeConfig(
+            # slightly stricter than your 759-run, but looser than the 135-run
+            heat_z=2.25, cold_z=-2.25,          # between 2.2 and 2.3
+            heat_min_frac=0.038, cold_min_frac=0.038,  # between 0.035 and 0.04
+
+            q_vmag=0.9950,                      # back to stricter side
+            q_zeta=0.9980,                      # back to stricter side
+            q_lap=0.9980,
+            q_gradT=0.9980,
+            q_mqf=0.9950,
+
+            tc_min_frac=0.0020, tc_max_frac=0.060,  # original compactness window
+            etc_min_frac=0.011,                     # between 0.010 and 0.012
+            ar_min_frac=0.014, ar_max_frac=0.31,    # between 0.013/0.32 and 0.015/0.30
+
+            batch_size=batch_size,
+        )
+
+        out_path = create_extreme_test_dataset(
+            variables=variables,
+            percent=percent,
+            reco_mode=reco_mode,
+            data_dir=output_dir,
+            cfg=cfg,
+        )
+
+        print(f"📦 Saved: {out_path}")
+
+        model_type = config["test"]["model_type"]
+        model_path = config["test"]["model_path"]
+        
+        test_loader = load_field_reco_dataloaders(
+                variable_list=variables,
+                batch_size=batch_size,
+                mode="test",
+                percent=10,
+                reco_mode=reco_mode,
+                data_dir="../../data/weatherbench2_fieldreco/extremes/"
+            )
+            
+        perf = evaluate(model_type, test_loader, model_path, variables, config)
+        
 
     else:
         print("⚠️ No action specified. Use --train or --test.")

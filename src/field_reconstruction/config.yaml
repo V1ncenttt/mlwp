@@ -1,26 +1,10 @@
-# config.yaml
-
-project: mlwp-thesis-fieldreco
-entity: your-wandb-username  # replace with your wandb user/org name
-
+loss: mse # Select from mse, mae, vae_elbo, smooth_l1, etc.
+split_ratio: 0.8
+model: diffusion_naive # Train, but needs to be set even for test
 
 data:
   dataset: weatherbench2
-  root_dir: /path/to/data
-  resolution: 5.625deg
-  variables: [t2m, u10, v10]
-
-
-loss: mse # Select from mse, mae, vae_elbo, smooth_l1, etc.
-
-logging:
-  log_every: 10
-  save_every: 1
-  use_wandb: true
-
-split_ratio: 0.8
-model: fukami_resnet
-
+  
 percent: 10
 batch_size: 32
 variables: 5vars_2d
@@ -28,19 +12,12 @@ output_dir: ../../data/weatherbench2_fieldreco/
 optimizer: adam
 learning_rate: 0.001 #0.00005
 weight_decay: 0.01
-epochs: 10
-tags: [baseline, transformer, lowres]
-notes: Initial experiment using Transformer on WB2 5.625°
+epochs: 25
 test:
-  test_dataset: 
-  model_path: ddpm-sage-moose-of-reward.pth
-  model_type: diffusion_naive
-
-#injection_mode: first
+  model_path: ddpm-olivine-malkoha-of-glee.pth
+  model_type: cubic_interpolation
 
 
-wandb:
-  project: mlwp-thesis-fieldreco
-  entity: your-wandb-username  # replace with your wandb user/org name
+
 
 

@@ -26,6 +26,7 @@ from plots_creator import plot_voronoi_reconstruction_comparison, plot_random_re
 from loss_functions import cwgan_discriminator_loss, cwgan_generator_loss, get_loss_function
 from models.diffusion.diffusion_unet import SimpleUnet, UnconditionalUnet
 from models.diffusion.ddpm import DDPM, UncondDDPM, DDIM
+from models.diffusion.ema_weights import EMA
 from models.fukami import FukamiNet
 
 #mlflow.set_tracking_uri("http://127.0.0.1:5000")
@@ -459,6 +460,36 @@ def compute_mae(predictions, targets):
     """
     mae = torch.mean(torch.abs(predictions - targets))
     return mae.item()
+# --- add this helper near your other utils ---
+def compute_val_noise_mse(ddim_model, val_loader, device, max_batches=None):
+    """
+    Compute the DDIM/DDPM training loss (noise MSE) on the validation set.
+
+    Args:
+        ddim_model: your DDIM instance (with forward returning (loss, ...))
+        val_loader: DataLoader yielding (inputs=cond, targets=x)
+        device: torch device
+        max_batches: optional int to cap validation cost (None = full val set)
+
+    Returns:
+        mean_loss: float, mean MSE over all val samples (weighted by batch size)
+    """
+    ddim_model.eval()
+    total_loss = 0.0
+    total_count = 0
+    with torch.no_grad():
+        for b_idx, (inputs, targets) in enumerate(val_loader):
+            if max_batches is not None and b_idx >= max_batches:
+                break
+            cond = inputs.to(device)
+            x = targets.to(device)
+            t = torch.randint(0, ddim_model.n_T, (x.shape[0],), device=device)
+            loss, _, _ = ddim_model(x, cond, t)  # same objective as training
+            # Assume 'loss' is mean over batch. Weight by batch size.
+            bs = x.size(0)
+            total_loss += loss.item() * bs
+            total_count += bs
+    return total_loss / max(total_count, 1)
 
 def validate_diffusion_model(ddpm, val_loader, device, num_samples=100, num_predictions=5):
     """
@@ -475,6 +506,7 @@ def validate_diffusion_model(ddpm, val_loader, device, num_samples=100, num_pred
         dict: Dictionary containing validation metrics
     """
     ddpm.eval()
+    
     total_rrmse = 0.0
     total_mae = 0.0
     num_batches = 0
@@ -508,7 +540,8 @@ def validate_diffusion_model(ddpm, val_loader, device, num_samples=100, num_pred
                         device=device,
                         cond=cond,
                         eta=0.0,  # Deterministic sampling for validation
-                        ddim_steps=25  # Fewer steps for faster validation
+                        ddim_steps=100,  # Fewer steps for faster validation
+                        cfg_scale = 1.5
                     )
                 else:  # Default to DDPM sampling
                     single_prediction = ddpm.sample(
@@ -576,11 +609,16 @@ def train_diffusion_model(model, data, model_save_path, config):
     # Set T from config or default to 50
     T = config.get("timesteps", 1000)
 
-    print("Initializing DDPM model and optimizer...")
-    lr = 2e-4
-    ddpm = DDPM(rn_rn_model, (1e-4, 0.02), T, cfg_dropout_prob=0.1).to(device)
+    print("Initializing DDIM model and optimizer...")
+    lr = 1e-4
+    ddpm = DDIM(rn_rn_model, (1e-4, 0.02), T, cfg_dropout_prob=0.1).to(device)
     optim = torch.optim.Adam(ddpm.parameters(), lr=lr)
-    
+
+    ema_decay = config.get("ema_decay", 0.9999)
+    ema_ramp  = config.get("ema_ramp", 2000)
+    #ema = EMA(ddpm, decay=ema_decay, ramp=ema_ramp).to(device)
+    #run.log({"ema_decay": ema_decay, "ema_ramp": ema_ramp})
+
     # Add cosine annealing with warm restarts scheduler
     T_0 = max(1, epochs // 4)  # Initial restart period (every 25% of total epochs)
     T_mult = 2  # Multiply restart period by this factor after each restart
@@ -592,7 +630,7 @@ def train_diffusion_model(model, data, model_save_path, config):
     )
     print(f"📈 Added cosine annealing warm restarts scheduler: lr={lr:.2e} -> eta_min={lr:.2e}")
     print(f"📈 Restart schedule: T_0={T_0}, T_mult={T_mult} (restarts every {T_0}, {T_0*T_mult}, {T_0*T_mult**2}, ... epochs)")
-    
+    conditioning_mode = rn_rn_model.conditioning_type
     # Log key hyperparameters to W&B
     run.log({
         "model_name": model_name,
@@ -601,13 +639,15 @@ def train_diffusion_model(model, data, model_save_path, config):
         "sampling":"ddpm",  # Indicate DDPM sampling method
         "timesteps_T": T,
         "batch_size": batch_size,
-        "conditioning": "hybrid",  # Separate conditioning input
+        "conditioning": conditioning_mode,  # Separate conditioning input
         "optimizer": "Adam",
         "scheduler": "CosineAnnealingWarmRestarts",
         "scheduler_T_0": T_0,
         "scheduler_T_mult": T_mult,
-        "min_learning_rate": lr * 0.01,
-        "total_epochs": epochs
+        "min_learning_rate": lr,
+        "total_epochs": epochs,
+        "cfg_dropout_prob": ddpm.cfg_dropout_prob,
+        "cfg_scale": 2.0
     })
     print(f"📊 Logged hyperparameters - Model: {model_name}, LR: {lr:.2e}, T: {T}, Batch Size: {batch_size}")
 
@@ -617,22 +657,13 @@ def train_diffusion_model(model, data, model_save_path, config):
 
 
     lastepoch = 0
-    """
-    load_checkpoint = False
-    if os.path.exists(model_path) and load_checkpoint:
-        print("Loading existing model checkpoint from:", model_path)
-        checkpoint = torch.load(model_path)
-        ddpm.load_state_dict(checkpoint['model_state_dict'])
-        optim.load_state_dict(checkpoint['optimizer_state_dict'])
-        if 'scheduler_state_dict' in checkpoint:
-            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        lastepoch = checkpoint['epoch']
-    """
+
     ddpm.to(device)
 
 
     for i in range(lastepoch, epochs):
         ddpm.train()
+        rn_rn_model.train()
         batch_pbar = tqdm(train_loader, leave=False)
         loss_ema = None
 
@@ -647,7 +678,7 @@ def train_diffusion_model(model, data, model_save_path, config):
             loss_ema = loss.item() if loss_ema is None else 0.99 * loss_ema + 0.01 * loss.item()
             
             # Log individual batch loss (like before)
-            print(f"Epoch {i} | Loss: {loss.item():.4f} | Loss EMA: {loss_ema:.4f}")
+            #print(f"Epoch {i} | Loss: {loss.item():.4f} | Loss EMA: {loss_ema:.4f}")
             batch_pbar.set_description(f"Epoch {i} | Loss EMA: {loss_ema:.4f}")
             
             # Log to W&B every batch (like before)
@@ -656,16 +687,22 @@ def train_diffusion_model(model, data, model_save_path, config):
             optim.zero_grad()
             loss.backward()
             optim.step()
+            #ema.update(ddpm)
 
         # Validation phase (less frequent, only every 5 epochs to save time)
         if i % 5 == 0 or i == epochs - 1:
+            rn_rn_model.eval()
             print(f"🔍 Running validation for epoch {i}...")
             val_metrics = validate_diffusion_model(ddpm, val_loader, device, num_samples=200, num_predictions=5)
             
+            # 2) NEW: noise-MSE on val (same objective used in training)
+            val_noise_mse = compute_val_noise_mse(ddpm, val_loader, device, max_batches=None)
+
             # Log validation metrics to W&B
             val_metrics_log = {
                 "val_rrmse": val_metrics['val_rrmse'],
                 "val_mae": val_metrics['val_mae'],
+                "val_loss": val_noise_mse,
                 "epoch": i,
                 "samples_evaluated": val_metrics['samples_evaluated'],
                 "predictions_per_sample": val_metrics['predictions_per_sample']
@@ -679,6 +716,7 @@ def train_diffusion_model(model, data, model_save_path, config):
         # Generate and save sample images (every few epochs to save time)
         if i % 10 == 0 or i == epochs - 1:
             ddpm.eval()
+            rn_rn_model.eval()
             with torch.no_grad():
                 # Get conditioning samples from validation set
                 sample_batch = next(iter(val_loader))
@@ -708,6 +746,7 @@ def train_diffusion_model(model, data, model_save_path, config):
         if i % 5 == 0 or i == epochs - 1:
             checkpoint_data['val_rrmse'] = val_metrics['val_rrmse']
             checkpoint_data['val_mae'] = val_metrics['val_mae']
+            checkpoint_data['val_noise_mse'] = val_noise_mse
             
         torch.save(checkpoint_data, os.path.join(model_save_path, f"ddpm_checkpoint_epoch_{i}.pt"))
         print(f"💾 Checkpoint saved for epoch {i}")
@@ -723,7 +762,8 @@ def train_diffusion_model(model, data, model_save_path, config):
     # Run final validation
     print("🔍 Running final validation...")
     final_val_metrics = validate_diffusion_model(ddpm, val_loader, device, num_samples=500, num_predictions=5)
-    
+    final_val_noise_mse = compute_val_noise_mse(ddpm, val_loader, device, max_batches=None)
+
     # Save the final model with the generated name
     final_model_path = f"models/{model_name}.pth"
     os.makedirs("models", exist_ok=True)
@@ -747,6 +787,7 @@ def train_diffusion_model(model, data, model_save_path, config):
         "final_model_path": final_model_path,
         "final_val_rrmse": final_val_metrics['val_rrmse'],
         "final_val_mae": final_val_metrics['val_mae'],
+        "final_val_noise_mse": final_val_noise_mse,  # NEW
         "training_completed": True
     })
     

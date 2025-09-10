@@ -48,6 +48,67 @@ class SpatialConditioning(ConditioningMethod):
         cond_projected = self.cond_conv(cond_resized)
         return features + cond_projected
 
+class EnhancedSpatialConditioning(ConditioningMethod):
+    """Improved spatial conditioning with better feature extraction."""
+    
+    def __init__(self, cond_channels, feature_channels, **kwargs):
+        super().__init__(cond_channels, feature_channels, **kwargs)
+        self.cond_encoder = nn.Sequential(
+            # Deeper with residual connections
+            nn.Conv2d(cond_channels, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            
+            ResidualBlock(64, 128),  # Add residual blocks
+            ResidualBlock(128, 256),
+            
+            # Self-attention to focus on important sensor regions
+            SelfAttention(256),
+            
+            nn.Conv2d(256, 256, 1),
+        )
+        self.cond_conv = nn.Conv2d(256, feature_channels, 1)
+    
+    def encode_conditioning(self, cond):
+        return self.cond_encoder(cond)
+    
+    def apply_conditioning(self, features, cond_encoded, feature_size):
+        cond_resized = F.interpolate(cond_encoded, size=feature_size, mode='bilinear')
+        cond_projected = self.cond_conv(cond_resized)
+        return features + cond_projected
+
+# Add these helper modules
+class ResidualBlock(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
+        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
+        self.relu = nn.ReLU()
+        self.downsample = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
+        
+    def forward(self, x):
+        residual = self.downsample(x)
+        out = self.relu(self.conv1(x))
+        out = self.conv2(out)
+        return self.relu(out + residual)
+
+class SelfAttention(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.query = nn.Conv2d(channels, channels//8, 1)
+        self.key = nn.Conv2d(channels, channels//8, 1)
+        self.value = nn.Conv2d(channels, channels, 1)
+        self.gamma = nn.Parameter(torch.tensor(0.0))
+        
+    def forward(self, x):
+        B, C, H, W = x.shape
+        query = self.query(x).view(B, -1, H*W).permute(0, 2, 1)
+        key = self.key(x).view(B, -1, H*W)
+        value = self.value(x).view(B, -1, H*W)
+        
+        attn = F.softmax(torch.bmm(query, key), dim=-1)
+        out = torch.bmm(value, attn.permute(0, 2, 1)).view(B, C, H, W)
+        return x + self.gamma * out
+    
 class HybridConditioning(ConditioningMethod):
     "A conditioning method that combines FiLM and cross-attention. Based on Zhuang et al. 2024."
     
@@ -272,13 +333,13 @@ class Block(nn.Module):
         self.conditioning_method = conditioning_method
         
         self.conv_1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
-        self.batchnorm_1 = nn.BatchNorm2d(out_ch)  
+        self.batchnorm_1 = nn.GroupNorm(num_groups=32, num_channels=out_ch)  
         
         # Time embedding projection
         self.time_linear = nn.Linear(time_emb_dim, out_ch)
 
         self.conv_2 = nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1)
-        self.batchnorm_2 = nn.BatchNorm2d(out_ch)
+        self.batchnorm_2 = nn.GroupNorm(num_groups=32, num_channels=out_ch) # Changed to groupnorm
 
         if self.sampling:
             self.conv_3 = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=2, stride=2)
@@ -343,189 +404,199 @@ class SinusoidalPositionEmbeddings(nn.Module):
         time = time.unsqueeze(-1)  
         half_dimension = self.dim // 2 
         exponent = torch.arange(half_dimension, device=time.device).float() / half_dimension
-        freq = 1e-4 ** exponent  
-        
-        thetas = time * freq 
-        embeddings = torch.cat([thetas.sin(), thetas.cos()], dim=-1)  
+        freq = (1e4) ** (-torch.arange(half_dimension, device=time.device).float() / half_dimension)
+        thetas = time * freq
+        embeddings = torch.cat([thetas.sin(), thetas.cos()], dim=-1)
         
         return embeddings
-
-
 class SimpleUnet(nn.Module):
     def __init__(self, in_channels=5, cond_channels=6, conditioning_type="spatial", **conditioning_kwargs):
         super().__init__()
         print(f"Using {conditioning_type} conditioning with {in_channels} input channels and {cond_channels} conditioning channels")
         
-        down_channels = (128, 256, 512)
-        up_channels = (512, 256, 128)
-        out_dim = 5
-        time_emb_dim = 256
+        down_channels = (128, 256, 512)   # enc: C0->C1->C2
+        up_channels   = (512, 256, 128)   # dec: C2->C1->C0
+        out_dim       = 5
+        time_emb_dim  = 256
 
-        # Time embedding layers
+        # Time embedding
         self.time_mlp = nn.Sequential(
             SinusoidalPositionEmbeddings(time_emb_dim),
             nn.Linear(time_emb_dim, time_emb_dim),
             nn.ReLU()
         )
-        
-        # Create conditioning method based on type
+
+        # Conditioning selection
         self.conditioning_type = conditioning_type
         conditioning_methods = {
             "spatial": SpatialConditioning,
-            "film": FiLMConditioning,
-            "hybrid": HybridConditioning,
+            "betterspatial": EnhancedSpatialConditioning,
+            "film":    FiLMConditioning,
+            "hybrid":  HybridConditioning,
         }
-        
         if conditioning_type not in conditioning_methods:
             raise ValueError(f"Unknown conditioning type: {conditioning_type}")
+        ConditioningClass = conditioning_methods[conditioning_type]
         print(f"Using {conditioning_type} conditioning method.")
+
+        # --- CONDITIONING MODULES ---
+        self.conditioning_methods = nn.ModuleDict()
         
-        # For hybrid conditioning, use shared encoding + level-specific projections
         if conditioning_type == "hybrid":
-            # Create one shared conditioning encoder for all levels
-            self.shared_conditioning = HybridConditioning(cond_channels, 512, **conditioning_kwargs)  # Use 512 as intermediate dim
-            
-            # Create level-specific cross-attention projections only
+            # Shared encoder + per-level cross-attn for skips
+            self.shared_conditioning = HybridConditioning(cond_channels, 512, **conditioning_kwargs)
             self.conditioning_projections = nn.ModuleDict()
-            
-            # Downsampling blocks: project to output channels of each block
             for i in range(len(down_channels) - 1):
-                out_channels = down_channels[i + 1]
-                self.conditioning_projections[f"down_{i}"] = CrossAttentionLayer(out_channels, 512)
-                
-            # Bottleneck: project to bottleneck channels
+                self.conditioning_projections[f"down_{i}"] = CrossAttentionLayer(down_channels[i + 1], 512)
             self.conditioning_projections["bottleneck"] = CrossAttentionLayer(down_channels[-1], 512)
-            
-            # Upsampling blocks: project to output channels of each block
-            for i in range(len(up_channels) - 1):
-                out_channels = up_channels[i + 1]
-                self.conditioning_projections[f"up_{i}"] = CrossAttentionLayer(out_channels, 512)
+            # Note: Hybrid conditioning for up path not implemented yet
         else:
-            # For spatial and film conditioning, keep the original approach (separate instances per level)
-            self.conditioning_methods = nn.ModuleDict()
-            
-            # Downsampling blocks: condition on output channels of each block
+            # Spatial / FiLM: per-level conditioning modules
+            # 1. Downsampling path conditioning - MATCHES BLOCK OUTPUT CHANNELS
             for i in range(len(down_channels) - 1):
-                out_channels = down_channels[i + 1]  # Output channels of this downsampling block
-                self.conditioning_methods[f"down_{i}"] = conditioning_methods[conditioning_type](
+                out_channels = down_channels[i + 1]  # Block output size
+                self.conditioning_methods[f"down_{i}"] = ConditioningClass(
                     cond_channels, out_channels, **conditioning_kwargs
                 )
-                
-            # Bottleneck: condition on bottleneck channels
-            self.conditioning_methods["bottleneck"] = conditioning_methods[conditioning_type](
-                cond_channels, down_channels[-1], **conditioning_kwargs
+            
+            # 2. Bottleneck conditioning - MATCHES BLOCK OUTPUT CHANNELS
+            self.conditioning_methods["bottleneck"] = ConditioningClass(
+                cond_channels, down_channels[-1], **conditioning_kwargs  # down_channels[-1] = 512
             )
             
-            # Upsampling blocks: condition on output channels of each block
+            # 3. Upsampling path conditioning - MATCHES BLOCK OUTPUT CHANNELS
             for i in range(len(up_channels) - 1):
-                out_channels = up_channels[i + 1]  # Output channels of this upsampling block
-                self.conditioning_methods[f"up_{i}"] = conditioning_methods[conditioning_type](
+                out_channels = up_channels[i + 1]  # Block output size (256, 128)
+                self.conditioning_methods[f"up_{i}"] = ConditioningClass(
                     cond_channels, out_channels, **conditioning_kwargs
                 )
-        
-        # Initial projection
+
+        # Stem
         self.conv_0 = nn.Conv2d(in_channels, down_channels[0], kernel_size=3, padding=1)
 
-        # Downsampling blocks
+        # Encoder (down) blocks
         self.downsampling = nn.ModuleList()
         for i in range(len(down_channels) - 1):
-            # For hybrid conditioning, pass None as conditioning_method since we handle it separately
+            # For spatial/film, pass the conditioning method to the Block
             conditioning_method = None if conditioning_type == "hybrid" else self.conditioning_methods[f"down_{i}"]
-            block = Block(down_channels[i], down_channels[i + 1], time_emb_dim, conditioning_method, up=False)
-            self.downsampling.append(block)
-            
+            self.downsampling.append(Block(down_channels[i], down_channels[i + 1], time_emb_dim, conditioning_method, up=False))
+
         # Bottleneck
         bottleneck_conditioning = None if conditioning_type == "hybrid" else self.conditioning_methods["bottleneck"]
         self.bottleneck = Block(down_channels[-1], down_channels[-1], time_emb_dim, bottleneck_conditioning, up=False)
 
-        # Upsampling blocks
+        # Decoder upsample blocks and fusion convs
         self.upsampling = nn.ModuleList()
+        self.fuse_convs = nn.ModuleList()
+
         for i in range(len(up_channels) - 1):
-            conditioning_method = None if conditioning_type == "hybrid" else self.conditioning_methods[f"up_{i}"]
-            self.upsampling.append(Block(up_channels[i] + down_channels[-i-1], up_channels[i+1], time_emb_dim, conditioning_method, up=True))
-        
+            # Get the conditioning method for this up level
+            up_cond_method = None if conditioning_type == "hybrid" else self.conditioning_methods[f"up_{i}"]
+            
+            # Create upsampling block - output channels are up_channels[i+1]
+            self.upsampling.append(Block(up_channels[i], up_channels[i + 1], time_emb_dim, up_cond_method, up=True))
+            
+            # After upsample, we concat with skip that has channels = down_channels[-i-1]
+            fuse_in_ch = up_channels[i + 1] + down_channels[-i-1]
+            self.fuse_convs.append(nn.Sequential(
+                nn.Conv2d(fuse_in_ch, up_channels[i + 1], kernel_size=3, padding=1),
+                nn.BatchNorm2d(up_channels[i + 1]),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(up_channels[i + 1], up_channels[i + 1], kernel_size=3, padding=1),
+                nn.BatchNorm2d(up_channels[i + 1]),
+                nn.ReLU(inplace=True),
+            ))
+
         self.output_proj = nn.Conv2d(up_channels[-1], out_dim, kernel_size=3, padding=1)
 
     def forward(self, x, timestep, cond):
-        """Forward pass with conditioning type specified at init."""
-        # Get time embeddings
+        """
+        Input:  x (B, in_channels, H, W), timestep (B,), cond (B, cond_channels, H, W) or None
+        Output: (B, 5, H, W)
+        """
+        # Time embeddings
         t = self.time_mlp(timestep)
-        
-        # Handle conditioning based on type
+        use_cond = (cond is not None)
+
+        # Prepare conditioning encodings
         if self.conditioning_type == "hybrid":
-            # For hybrid conditioning: encode once, then apply level-specific projections
-            if cond is not None:
-                shared_cond_encoded = self.shared_conditioning.encode_conditioning(cond)
-                shared_patches = shared_cond_encoded['patches']  # (B, n_patches, 512)
-            else:
-                # CFG: No conditioning - create zero patches for unconditional generation
-                B = x.shape[0]
-                device = x.device
-                # Create zero conditioning patches with same shape as normal patches
-                shared_patches = torch.zeros(B, 64, 512, device=device)  # (B, n_patches=64, embed_dim=512)
+            if use_cond:
+                shared = self.shared_conditioning.encode_conditioning(cond)
+                shared_patches = shared["patches"]  # (B, n_patches, 512)
         else:
-            # For spatial/film conditioning: encode separately for each level (original approach)
+            # spatial/film: pre-encode per-level
             cond_encoded_levels = {}
-            if cond is not None:
+            if use_cond:
+                # Pre-encode conditioning for ALL levels (down, bottleneck, AND up)
                 for level_name, conditioning_method in self.conditioning_methods.items():
                     cond_encoded_levels[level_name] = conditioning_method.encode_conditioning(cond)
             else:
-                # CFG: Set all conditioning to None
                 for level_name in self.conditioning_methods.keys():
                     cond_encoded_levels[level_name] = None
-        
-        # Initial convolution
+
+        # Stem
         x = self.conv_0(x)
-        res = []
 
-        # Downsampling with level-specific conditioning
-        for i, down in enumerate(self.downsampling):
-            if self.conditioning_type == "hybrid":
-                # Apply shared conditioning via cross-attention projection
-                x, _ = down(x, t, None)  # No conditioning in Block itself
-                # Apply hybrid conditioning manually after the block
-                B, C, H, W = x.shape
-                x_flat = x.view(B, C, H*W).transpose(1, 2)  # (B, H*W, C)
-                x_conditioned = self.conditioning_projections[f"down_{i}"](x_flat, shared_patches)
-                x = x_conditioned.transpose(1, 2).view(B, C, H, W)  # Back to (B, C, H, W)
-            else:
-                level_cond = cond_encoded_levels.get(f"down_{i}")
-                x, _ = down(x, t, level_cond)
-            res.append(x)
-
-        # Bottleneck
+        # ---------- Downsampling ----------
+        skips = []
         if self.conditioning_type == "hybrid":
-            _, x = self.bottleneck(x, t, None)  # No conditioning in Block itself
-            # Apply hybrid conditioning manually after the block
-            B, C, H, W = x.shape
-            x_flat = x.view(B, C, H*W).transpose(1, 2)  # (B, H*W, C)
-            x_conditioned = self.conditioning_projections["bottleneck"](x_flat, shared_patches)
-            x = x_conditioned.transpose(1, 2).view(B, C, H, W)  # Back to (B, C, H, W)
+            for i, down in enumerate(self.downsampling):
+                h, z = down(x, t, None) # no in-block cond
+                if use_cond:
+                    B, C, H, W = h.shape
+                    h_flat = h.view(B, C, H*W).transpose(1, 2)  # (B, HW, C)
+                    h_cond = self.conditioning_projections[f"down_{i}"](h_flat, shared_patches)
+                    h = h_cond.transpose(1, 2).view(B, C, H, W)
+                skips.append(h)
+                x = z
+        else:
+            # spatial/film
+            for i, down in enumerate(self.downsampling):
+                level_cond = cond_encoded_levels.get(f"down_{i}")
+                h, z = down(x, t, level_cond)
+                skips.append(h)
+                x = z
+
+        # ---------- Bottleneck ----------
+        if self.conditioning_type == "hybrid":
+            h, _ = self.bottleneck(x, t, None)
+            if use_cond:
+                B, C, H, W = h.shape
+                h_flat = h.view(B, C, H*W).transpose(1, 2)
+                h_cond = self.conditioning_projections["bottleneck"](h_flat, shared_patches)
+                x = h_cond.transpose(1, 2).view(B, C, H, W)
+            else:
+                x = h
         else:
             bottleneck_cond = cond_encoded_levels.get("bottleneck")
-            _, x = self.bottleneck(x, t, bottleneck_cond)
-        
-        # Upsampling
-        for i in range(len(self.upsampling)):
-            if x.shape[-2:] != res[-i-1].shape[-2:]:
-                x = F.interpolate(x, size=res[-i-1].shape[-2:], mode='bilinear', align_corners=False)
-            
-            x = torch.cat([x, res[-i-1]], dim=1)
-            
-            if self.conditioning_type == "hybrid":
-                x, _ = self.upsampling[i](x, t, None)  # No conditioning in Block itself
-                # Apply hybrid conditioning manually after the block
-                B, C, H, W = x.shape
-                x_flat = x.view(B, C, H*W).transpose(1, 2)  # (B, H*W, C)
-                x_conditioned = self.conditioning_projections[f"up_{i}"](x_flat, shared_patches)
-                x = x_conditioned.transpose(1, 2).view(B, C, H, W)  # Back to (B, C, H, W)
-            else:
-                level_cond = cond_encoded_levels.get(f"up_{i}")
-                x, _ = self.upsampling[i](x, t, level_cond)
+            h, _ = self.bottleneck(x, t, bottleneck_cond)
+            x = h
 
+        # ---------- Upsampling ----------
+        for i in range(len(self.upsampling)):
+            # 1) upsample WITH CONDITIONING
+            if self.conditioning_type != "hybrid":
+                up_cond = cond_encoded_levels.get(f"up_{i}")
+            else:
+                up_cond = None # Hybrid not implemented for up path
+                
+            # Upsample with conditioning
+            h_up, z = self.upsampling[i](x, t, up_cond)
+            x_up = z
+
+            # 2) concat skip
+            skip = skips[-i-1]
+            if x_up.shape[-2:] != skip.shape[-2:]:
+                x_up = F.interpolate(x_up, size=skip.shape[-2:], mode='bilinear', align_corners=False)
+            x = torch.cat([x_up, skip], dim=1)
+
+            # 3) fuse
+            x = self.fuse_convs[i](x)
+
+        # Output
         x = self.output_proj(x)
         return x
-
+    
 class UnconditionalUnet(nn.Module):
     """
     A simplified variant of the Unet architecture for diffusion models.

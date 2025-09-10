@@ -7,7 +7,7 @@ from models.diffusion.diffusion_unet import SimpleUnet
 from models.diffusion.ddpm import DDPM, DDIM
 import matplotlib.pyplot as plt
 from utils import get_device
-from plots_creator import plot_random_reconstruction, plot_l2_error_distributions
+from plots_creator import plot_random_reconstruction, plot_l2_error_distributions, plot_reconstruction_per_snapshot_per_field
 from utils import create_model, get_device
 from scipy.interpolate import griddata
 from skimage.metrics import structural_similarity as ssim
@@ -217,8 +217,8 @@ def count_model_flops(model, sample_input, model_type="gan", k=5):
                     try:
                         print(f"🔍 ptflops debug: input_shape = {sample_for_flops.shape[1:]}")
                         print(f"🔍 ptflops debug: model type = {type(model).__name__}")
-                        
-                        input_shape = sample_for_flops.shape[1:]
+
+                        input_shape = tuple(sample_for_flops.shape[1:])
                         macs, params = get_model_complexity_info(
                             model, 
                             input_shape, 
@@ -370,8 +370,9 @@ def evaluate_interp(test_loader, mode: str = 'cubic', nb_channels: int = 2, vari
 
     with torch.no_grad():
         pbar = tqdm(test_loader, desc="Testing")
-
+        
         for inputs, targets in pbar:
+            
             inputs, targets = inputs.to(device), targets.to(device)
             inputs_np = inputs.cpu().numpy()   # (B, 1 + Nvars, H, W)
             targets_np = targets.cpu().numpy() # (B, Nvars, H, W)
@@ -459,7 +460,7 @@ def evaluate_interp(test_loader, mode: str = 'cubic', nb_channels: int = 2, vari
     save_dir = Path("plots/evaluation")
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    
+    indices = [3, 17, 42, 88, 123]
     if mode == "kriging":
         plot_l2_error_distributions(l2_errors_dict, variable_names, "Kriging", str(save_dir),)
         plot_random_reconstruction(
@@ -470,6 +471,16 @@ def evaluate_interp(test_loader, mode: str = 'cubic', nb_channels: int = 2, vari
             save_dir=str(save_dir),
             num_samples=7
         )
+        
+        plot_reconstruction_per_snapshot_per_field(
+            model="kriging",
+            val_loader=test_loader,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            model_name="kriging",
+            save_dir="eval_plots",
+            indices=indices,
+        )
+        
     elif mode == "cubic":
         plot_l2_error_distributions(l2_errors_dict, variable_names, "Cubic_Interpolation", str(save_dir),)
         plot_random_reconstruction(
@@ -480,7 +491,17 @@ def evaluate_interp(test_loader, mode: str = 'cubic', nb_channels: int = 2, vari
             save_dir=str(save_dir),
             num_samples=7
         )
-    
+        
+        plot_reconstruction_per_snapshot_per_field(
+            model="cubic_interpolation",
+            val_loader=test_loader,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            model_name="cubic_interpolation",
+            save_dir="eval_plots",
+            indices=indices,
+        )
+        
+
     return {
         "rrmse": np.mean(rrmse_total),
         "mae": np.mean(mae_total),
@@ -500,12 +521,12 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
     print(f'model_type: {model_type}')
 
     if model_type == "cubic_interpolation":
-        evaluate_interp(test_loader, mode=3, nb_channels=nb_channels, variable_names=variable_names)
-        return
+        return evaluate_interp(test_loader, mode="cubic", nb_channels=nb_channels, variable_names=variable_names)
+        
     elif model_type == "kriging":
-        evaluate_interp(test_loader, mode="kriging", nb_channels=nb_channels, variable_names=variable_names)
-        return
-    elif "gan" in model_type and 'injection_mode' in config_file and config_file['injection_mode'] == "first":
+        return evaluate_interp(test_loader, mode="kriging", nb_channels=nb_channels, variable_names=variable_names)
+        
+    elif "gan" in model_type:
         print("🟢 Evaluating GAN with random noise injection (1st layer)")
         return evaluate_ensemble_model(
             model_type=model_type,
@@ -517,12 +538,14 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
         
     elif "diffusion" in model_type:
         print("🟢 Evaluating Diffusion model")
+        print("k=1")
         return evaluate_ensemble_model(
             model_type=model_type,
             test_loader=test_loader,
             checkpoint_path=checkpoint_path,
             variable_names=variable_names,
-            config_file=config_file
+            config_file=config_file,
+            k=5
         )
         
        
@@ -575,7 +598,10 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
 
     with torch.no_grad():
         pbar = tqdm(test_loader, desc="Testing")
+        
         for inputs, targets in pbar:
+            
+            
             inputs, targets = inputs.to(device), targets.to(device)
 
             if model_type == "vae":
@@ -660,6 +686,18 @@ def evaluate(model_type, test_loader, checkpoint_path, variable_names=None, conf
         num_samples
         =7
     )
+    
+    indices = [3, 17, 42, 88, 123]
+
+    plot_reconstruction_per_snapshot_per_field(
+        model=model,
+        val_loader=test_loader,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        model_name=model_type,
+        save_dir="eval_plots",
+        indices=indices,
+    )
+    
     return {
         "rrmse": np.mean(rrmse_total),
         "mae": np.mean(mae_total),
@@ -683,7 +721,7 @@ def check_normalization(tensor, name="Tensor"):
     print(f"  Std:  {tensor_np.std():.4f}")
     
 
-def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_names=None, config_file=None, k=5):
+def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_names=None, config_file=None, k=25):
     """
     Evaluate an ensemble model by averaging multiple predictions
     """
@@ -696,7 +734,7 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
     
     
     if "gan" in model_type:
-        model = create_model(model_type, nb_channels=nb_channels)
+        model = create_model(model_type, nb_channels=nb_channels+1)
         model = model[0].to(device)
         print(f"🟢 Generator input channels: {nb_channels+1}")
         print(f"🟢 Generator output channels: {model.final.out_channels if hasattr(model, 'final') else 'Unknown'}")
@@ -737,7 +775,7 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
         print(f"⚠️ FLOP counting not available: {flop_results['total_flops']}")
     
     # Limit to 200 samples for diffusion models to speed up evaluation
-    max_samples = 500 if "diffusion" in model_type else len(test_loader.dataset)
+    max_samples = 1000 if "diffusion" in model_type else len(test_loader.dataset)
     if "diffusion" in model_type:
         print(f"⚡ Fast evaluation mode: limiting to {max_samples} samples for diffusion model")
         if isinstance(model, DDIM):
@@ -773,14 +811,17 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
                     # Use the ddpm model to generate predictions. dont skip the first channel. to get the predictions we need sample()
                     cond = inputs  # Use full inputs as conditioning (including mask)
                     batch_size, _, H, W = targets.shape
-                    
+                    cfgscale = 1.5
+                    print(cfgscale)
                     # Generate samples using the DDPM
                     preds = model.sample(
                         n_sample=batch_size,
                         size=(nb_channels, H, W),  # Size of the target tensor
                         device=device,
                         cond=cond,  # Pass conditioning tensor
-                        ddim_steps=50
+                        ddim_steps=100,
+                        cfg_scale=cfgscale,
+                        noise_aware_cfg = False
                     )
                 else:
                     preds = model(inputs)
@@ -859,6 +900,18 @@ def evaluate_ensemble_model(model_type, test_loader, checkpoint_path, variable_n
         num_samples=7
     )
     """
+    indices = [3, 17, 42, 88, 123]
+    print("-----")
+    
+    plot_reconstruction_per_snapshot_per_field(
+        model=model,
+        val_loader=test_loader,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        model_name=model_type,
+        save_dir="eval_plots",
+        indices=indices,
+    )
+    
     
     return {
         "rrmse": np.mean(rrmse_total),
