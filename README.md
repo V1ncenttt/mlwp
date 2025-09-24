@@ -72,7 +72,7 @@ mlwp/
 │   └── forecast/                   # Future: multi-step forecasting
 ├── plots/                          # Generated visualizations
 └── logs/                           # Training logs and outputs
-
+```
 ---
 
 ## 📊 Evaluation Metrics
